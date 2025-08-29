@@ -9,6 +9,7 @@ const { ObjectId } = require("mongodb");
 
 
 dotenv.config();
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -47,6 +48,7 @@ async function run() {
         const parcelCollection = db.collection('parcels');
         const userCollection = db.collection('users');
 
+        // ***** Parcel Releted API ***** ///
 
         // API: Get parcels (optionally by user email)
         app.get('/parcels', async (req, res) => {
@@ -195,7 +197,26 @@ async function run() {
             }
         });
 
+        // ***** Payment Releted API ***** ///
 
+        //Patment intending API for Stripe //
+        app.post('/create-payment-intent', async (req, res) => {
+            const amountInCents = req.body.amountInCents;
+            try {
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount: amountInCents,
+                    currency: 'usd',
+                    payment_method_types: ['card'],
+                });
+            res.json ({ clientSecret: paymentIntent.client_secret}); 
+            }
+            catch(error){
+                res.status(500).json({error: error.message});
+            }
+        })
+
+
+        // ***** User Releted API ***** ///
 
         // API: Upload user profile photo to Cloudinary and get the image URL
         app.post("/upload-photo", upload.single("photo"), async (req, res) => {
