@@ -79,6 +79,7 @@ async function run() {
                 // Add required fields
                 newParcel.createdAt = new Date();
                 newParcel.status = "Pending"; // default status
+                newParcel.paymentStatus = "Not Paid"; // default status
 
                 const result = await parcelCollection.insertOne(newParcel);
                 res.status(201).send(result);
@@ -87,6 +88,30 @@ async function run() {
                 res.status(500).send({ message: "Failed to create parcel" });
             }
         });
+
+
+        // API: Get parcel by trackingId
+        app.get('/parcels/:trackingId', async (req, res) => {
+            try {
+                const { trackingId } = req.params;
+
+                if (!trackingId) {
+                    return res.status(400).send({ message: "Tracking ID is required" });
+                }
+
+                const parcel = await parcelCollection.findOne({ trackingId });
+
+                if (!parcel) {
+                    return res.status(404).send({ message: "Parcel not found" });
+                }
+
+                res.send(parcel);
+            } catch (error) {
+                console.error("Error fetching parcel by trackingId:", error);
+                res.status(500).send({ message: "Failed to fetch parcel" });
+            }
+        });
+
 
         // API: Cancel parcel with rules and regulations 
         app.patch("/parcels/:id/cancel", async (req, res) => {
