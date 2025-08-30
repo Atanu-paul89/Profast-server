@@ -208,12 +208,45 @@ async function run() {
                     currency: 'usd',
                     payment_method_types: ['card'],
                 });
-            res.json ({ clientSecret: paymentIntent.client_secret}); 
+                res.json({ clientSecret: paymentIntent.client_secret });
             }
-            catch(error){
-                res.status(500).json({error: error.message});
+            catch (error) {
+                res.status(500).json({ error: error.message });
             }
         })
+
+        // PATCH: Update payment status and save payment info
+        app.patch('/parcels/:trackingId/payment', async (req, res) => {
+            try {
+                const { trackingId } = req.params;
+                const { paymentIntentId, amount, payerEmail } = req.body;
+
+                const update = {
+                    paymentStatus: "Paid",
+                    paymentInfo: {
+                        paymentIntentId,
+                        amount,
+                        paidAt: new Date(),
+                        payerEmail
+                    }
+                };
+
+                const result = await parcelCollection.updateOne(
+                    { trackingId },
+                    { $set: update }
+                );
+
+                if (result.modifiedCount > 0) {
+                    res.send({ success: true });
+                } else {
+                    res.status(404).send({ success: false, message: "Parcel not found" });
+                }
+            } catch (error) {
+                console.error("Error updating payment info:", error);
+                res.status(500).send({ success: false, message: "Failed to update payment info" });
+            }
+        });
+
 
 
         // ***** User Releted API ***** ///
