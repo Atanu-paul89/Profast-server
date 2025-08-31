@@ -47,6 +47,7 @@ async function run() {
         const db = client.db('profast');
         const parcelCollection = db.collection('parcels');
         const userCollection = db.collection('users');
+        const trackingCollection = db.collection('tracking');
 
         // ***** Parcel Releted API ***** ///
 
@@ -91,31 +92,7 @@ async function run() {
             }
         });
 
-
-        // API: Get parcel by trackingId
-        app.get('/parcels/:trackingId', async (req, res) => {
-            try {
-                const { trackingId } = req.params;
-
-                if (!trackingId) {
-                    return res.status(400).send({ message: "Tracking ID is required" });
-                }
-
-                const parcel = await parcelCollection.findOne({ trackingId });
-
-                if (!parcel) {
-                    return res.status(404).send({ message: "Parcel not found" });
-                }
-
-                res.send(parcel);
-            } catch (error) {
-                console.error("Error fetching parcel by trackingId:", error);
-                res.status(500).send({ message: "Failed to fetch parcel" });
-            }
-        });
-
-
-        // API: Cancel parcel with rules and regulations 
+        // API: Cancel parcel with rules and regulations //
         app.patch("/parcels/:id/cancel", async (req, res) => {
             try {
                 const { id } = req.params;
@@ -173,7 +150,7 @@ async function run() {
             }
         });
 
-        // API: Delete parcel
+        // API: Delete parcel //
         app.delete("/parcels/:id", async (req, res) => {
             try {
                 const { id } = req.params;
@@ -197,9 +174,81 @@ async function run() {
             }
         });
 
+        // API: Get parcel by trackingId //
+        app.get('/parcels/:trackingId', async (req, res) => {
+            try {
+                const { trackingId } = req.params;
+
+                if (!trackingId) {
+                    return res.status(400).send({ message: "Tracking ID is required" });
+                }
+
+                const parcel = await parcelCollection.findOne({ trackingId });
+
+                if (!parcel) {
+                    return res.status(404).send({ message: "Parcel not found" });
+                }
+
+                res.send(parcel);
+            } catch (error) {
+                console.error("Error fetching parcel by trackingId:", error);
+                res.status(500).send({ message: "Failed to fetch parcel" });
+            }
+        });
+
+
+
+        // ***** Tracking Releted API ***** ///
+
+        // API: Get parcel by parcelId
+        app.get('/tracking/:parcelId', async (req, res) => {
+            const { parcelId } = req.params;
+
+            try {
+                const logs = await trackingCollection
+                    .find({ parcel_id: new ObjectId(parcelId) })
+                    .sort({ time: 1 }) // chronological order
+                    .toArray();
+
+                res.send(logs);
+            } catch (error) {
+                console.error("Error fetching tracking logs:", error);
+                res.status(500).send({ message: "Failed to fetch tracking logs" });
+            }
+        });
+
+        // API: Tracking the parcel
+        app.post('/tracking', async (req, res) => {
+            const { tracking_Id, parcel_id, status, message, updated_by = '' } = req.body;
+
+            const log = {
+                tracking_Id,
+                parcel_id: parcel_id ? new ObjectId(parcel_id) : undefined,
+                status,
+                message,
+                time: new Date(),
+                updated_by,
+            };
+
+            const result = await trackingCollection.insertOne(log);
+
+            // ✅ Always update parcel's latest status
+            if (parcel_id) {
+                await parcelCollection.updateOne(
+                    { _id: new ObjectId(parcel_id) },
+                    { $set: { status } }
+                );
+            }
+
+            res.send({ success: true, insertedId: result.insertedId });
+        });
+
+
+
+
         // ***** Payment Releted API ***** ///
 
-        //Patment intending API for Stripe //
+        // API: Patment intending for Stripe //
         app.post('/create-payment-intent', async (req, res) => {
             const amountInCents = req.body.amountInCents;
             try {
@@ -215,7 +264,7 @@ async function run() {
             }
         })
 
-        // PATCH: Update payment status and save payment info
+        // API: Update payment status and save payment info
         app.patch('/parcels/:trackingId/payment', async (req, res) => {
             try {
                 const { trackingId } = req.params;
@@ -248,7 +297,6 @@ async function run() {
         });
 
 
-
         // ***** User Releted API ***** ///
 
         // API: Upload user profile photo to Cloudinary and get the image URL
@@ -279,7 +327,7 @@ async function run() {
             }
         });
 
-        // Create or update user
+        // API: Create or update user
         app.post('/users', async (req, res) => {
             try {
                 const user = { ...req.body };
@@ -305,7 +353,7 @@ async function run() {
             }
         });
 
-        // Get all users
+        // API: Get all users
         app.get('/users', async (req, res) => {
             try {
                 const users = await userCollection.find().toArray();
@@ -316,7 +364,7 @@ async function run() {
             }
         });
 
-        // Get user by email
+        // API: Get user by email
         app.get('/users/:email', async (req, res) => {
             try {
                 const email = req.params.email;
@@ -354,3 +402,6 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
     console.log(`server is listening on port ${port}`);
 });
+
+
+
