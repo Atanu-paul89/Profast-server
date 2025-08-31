@@ -74,6 +74,23 @@ async function run() {
             }
         });
 
+        // API: add parcels to db & create intial tracking status //
+        // app.post('/parcels', async (req, res) => {
+        //     try {
+        //         const newParcel = req.body;
+
+        //         // Add required fields
+        //         newParcel.createdAt = new Date();
+        //         newParcel.status = "Pending"; // default status
+        //         newParcel.paymentStatus = "Not Paid"; // default status
+
+        //         const result = await parcelCollection.insertOne(newParcel);
+        //         res.status(201).send(result);
+        //     } catch (error) {
+        //         console.error("Error inserting parcel: ", error);
+        //         res.status(500).send({ message: "Failed to create parcel" });
+        //     }
+        // });
         // API: add parcels to db //
         app.post('/parcels', async (req, res) => {
             try {
@@ -81,16 +98,31 @@ async function run() {
 
                 // Add required fields
                 newParcel.createdAt = new Date();
-                newParcel.status = "Pending"; // default status
-                newParcel.paymentStatus = "Not Paid"; // default status
+                newParcel.status = "Pending";       // default status
+                newParcel.paymentStatus = "Not Paid"; // default payment
 
+                // Save parcel
                 const result = await parcelCollection.insertOne(newParcel);
+
+                // ✅ Add initial tracking log
+                if (result.insertedId) {
+                    await trackingCollection.insertOne({
+                        tracking_Id: newParcel.trackingId || newParcel.tracking_Id, // handle both naming styles
+                        parcel_id: result.insertedId,
+                        status: "Pending",
+                        message: "Parcel created and awaiting pickup",
+                        time: new Date(),
+                        updated_by: "System"
+                    });
+                }
+
                 res.status(201).send(result);
             } catch (error) {
                 console.error("Error inserting parcel: ", error);
                 res.status(500).send({ message: "Failed to create parcel" });
             }
         });
+
 
         // API: Cancel parcel with rules and regulations //
         app.patch("/parcels/:id/cancel", async (req, res) => {
