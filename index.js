@@ -1,14 +1,16 @@
+const dotenv = require('dotenv');
+dotenv.config();
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const cloudinary = require("cloudinary").v2;
 const multer = require("multer");
 const streamifier = require("streamifier");
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const { ObjectId } = require("mongodb");
+const jwt = require('jsonwebtoken');
+const secret = process.env.JWT_SECRET;
 
 
-dotenv.config();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
@@ -16,6 +18,7 @@ const port = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
 
 //setting up cloudinary
 cloudinary.config({
@@ -40,6 +43,27 @@ const client = new MongoClient(uri, {
     }
 });
 
+//jwt middle ware // 
+const verifyJWT = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+        return res.status(401).send({ message: "Unauthorized access" });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    jwt.verify(token, secret, (err, decoded) => {
+        if (err) {
+            return res.status(403).send({ message: "Forbidden access" });
+        }
+
+        req.decoded = decoded;
+        next();
+    });
+};
+
+
 async function run() {
     try {
         await client.connect();
@@ -48,11 +72,26 @@ async function run() {
         const parcelCollection = db.collection('parcels');
         const userCollection = db.collection('users');
         const trackingCollection = db.collection('tracking');
+        const riderCollection = db.collection('rider_form');
+
+        // ***** jwt security API ***** //
+        app.post('/jwt', async (req, res) => {
+            const { email } = req.body;
+
+            if (!email) {
+                return res.status(400).send({ message: "Email is required" });
+            }
+
+            const token = jwt.sign({ email }, secret, { expiresIn: '1h' });
+
+            res.send({ token });
+        });
+
 
         // ***** Parcel Releted API ***** ///
 
         // API: Get parcels (optionally by user email)
-        app.get('/parcels', async (req, res) => {
+        app.get('/parcels', verifyJWT, async (req, res) => {
             try {
                 const { email } = req.query; // ?email=user@gmail.com
 
@@ -75,23 +114,6 @@ async function run() {
         });
 
         // API: add parcels to db & create intial tracking status //
-        // app.post('/parcels', async (req, res) => {
-        //     try {
-        //         const newParcel = req.body;
-
-        //         // Add required fields
-        //         newParcel.createdAt = new Date();
-        //         newParcel.status = "Pending"; // default status
-        //         newParcel.paymentStatus = "Not Paid"; // default status
-
-        //         const result = await parcelCollection.insertOne(newParcel);
-        //         res.status(201).send(result);
-        //     } catch (error) {
-        //         console.error("Error inserting parcel: ", error);
-        //         res.status(500).send({ message: "Failed to create parcel" });
-        //     }
-        // });
-        // API: add parcels to db //
         app.post('/parcels', async (req, res) => {
             try {
                 const newParcel = req.body;
@@ -207,7 +229,7 @@ async function run() {
         });
 
         // API: Get parcel by trackingId //
-        app.get('/parcels/:trackingId', async (req, res) => {
+        app.get('/parcels/:trackingId', verifyJWT, async (req, res) => {
             try {
                 const { trackingId } = req.params;
 
@@ -233,7 +255,7 @@ async function run() {
         // ***** Tracking Releted API ***** ///
 
         // API: Get parcel by parcelId
-        app.get('/tracking/:parcelId', async (req, res) => {
+        app.get('/tracking/:parcelId', verifyJWT, async (req, res) => {
             const { parcelId } = req.params;
 
             try {
@@ -359,26 +381,31 @@ async function run() {
             }
         });
 
-        // API: Create or update user
+        // API: Create or update user 
         app.post('/users', async (req, res) => {
             try {
                 const user = { ...req.body };
-                console.log("Incoming user data:", user);
 
                 if (!user.email || typeof user.email !== 'string') {
                     return res.status(400).send({ message: "Invalid or missing email" });
                 }
 
-                delete user._id; // ✅ Remove _id before updating
+                delete user._id; // make sure _id isn’t sent
 
                 const result = await userCollection.updateOne(
-                    { email: user.email },
-                    { $set: user },
-                    { upsert: true }
+                    { email: user.email },        // find by email
+                    { $set: user },               // update with new data
+                    { upsert: true }              // insert if not found
                 );
 
-                console.log("MongoDB update result:", result);
-                res.status(200).send(result);
+                const isNewUser = result.upsertedCount > 0;
+
+                res.status(200).send({
+                    success: true,
+                    isNewUser,
+                    message: isNewUser ? "User created successfully" : "User updated successfully"
+                });
+
             } catch (error) {
                 console.error("Error saving user:", error);
                 res.status(500).send({ message: "Failed to save user" });
@@ -386,7 +413,7 @@ async function run() {
         });
 
         // API: Get all users
-        app.get('/users', async (req, res) => {
+        app.get('/users', verifyJWT, async (req, res) => {
             try {
                 const users = await userCollection.find().toArray();
                 res.status(200).send(users);
@@ -397,7 +424,7 @@ async function run() {
         });
 
         // API: Get user by email
-        app.get('/users/:email', async (req, res) => {
+        app.get('/users/:email', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
                 const user = await userCollection.findOne({ email });
@@ -411,7 +438,6 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch user" });
             }
         });
-
 
 
         // testing if server is running or not : but need to comment before deploying on varcel
