@@ -87,6 +87,88 @@ async function run() {
             res.send({ token });
         });
 
+        // ***** Rider Releted API ***** // 
+
+        // API: save rider-form data to db // 
+        app.post('/apply-rider', async (req, res) => {
+            try {
+                const formData = req.body;
+                const email = formData.email;
+
+                if (!email) {
+                    return res.status(400).send({ message: "Email is required" });
+                }
+
+                // Check if user exists in users collection
+                const user = await userCollection.findOne({ email });
+                if (!user) {
+                    return res.status(404).send({ message: "User not found" });
+                }
+
+                // Check if user has already applied
+                const lastApplication = await riderCollection.findOne(
+                    { email },
+                    { sort: { submittedAt: -1 } }
+                );
+
+                if (lastApplication && lastApplication.status !== "Rejected") {
+                    return res.status(400).send({
+                        message: "You have already applied. Please wait for admin review."
+                    });
+                }
+
+                // If last application was rejected, update it
+                if (lastApplication && lastApplication.status === "Rejected") {
+                    await riderCollection.updateOne(
+                        { _id: lastApplication._id },
+                        {
+                            $set: {
+                                ...formData,
+                                status: "Pending",
+                                submittedAt: new Date()
+                            }
+                        }
+                    );
+
+                    // Increment application count in users collection
+                    await userCollection.updateOne(
+                        { email },
+                        {
+                            $set: { IsRequestedToBeRider: "Yes" },
+                            $inc: { AppliedToBeRider: 1 }
+                        }
+                    );
+
+                    return res.status(200).send({ message: "Re-application submitted successfully" });
+                }
+
+                // First-time application
+                const newApplication = {
+                    ...formData,
+                    status: "Pending",
+                    submittedAt: new Date()
+                };
+
+                await riderCollection.insertOne(newApplication);
+
+                // Update user record
+                await userCollection.updateOne(
+                    { email },
+                    {
+                        $set: { IsRequestedToBeRider: "Yes" },
+                        $inc: { AppliedToBeRider: 1 }
+                    }
+                );
+
+                res.status(201).send({ message: "Application submitted successfully" });
+
+            } catch (error) {
+                console.error("Error submitting rider application:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+
 
         // ***** Parcel Releted API ***** ///
 
@@ -296,8 +378,6 @@ async function run() {
 
             res.send({ success: true, insertedId: result.insertedId });
         });
-
-
 
 
         // ***** Payment Releted API ***** ///
