@@ -43,8 +43,6 @@ const client = new MongoClient(uri, {
     }
 });
 
-
-
 async function run() {
     try {
         await client.connect();
@@ -54,8 +52,10 @@ async function run() {
         const userCollection = db.collection('users');
         const trackingCollection = db.collection('tracking');
         const riderCollection = db.collection('rider_form');
+        const logCollection = db.collection('admin_logs');
 
         // ***** jwt config & API  ***** //
+
         // jwt middle ware // 
         const verifyJWT = async (req, res, next) => {
             const authHeader = req.headers.authorization;
@@ -108,84 +108,6 @@ async function run() {
         // ***** Rider Releted API ***** // 
 
         // API: save rider-form data to db // 
-        // app.post('/apply-rider', async (req, res) => {
-        //     try {
-        //         const formData = req.body;
-        //         const email = formData.email;
-
-        //         if (!email) {
-        //             return res.status(400).send({ message: "Email is required" });
-        //         }
-
-        //         // Check if user exists in users collection
-        //         const user = await userCollection.findOne({ email });
-        //         if (!user) {
-        //             return res.status(404).send({ message: "User not found" });
-        //         }
-
-        //         // Check if user has already applied
-        //         const lastApplication = await riderCollection.findOne(
-        //             { email },
-        //             { sort: { submittedAt: -1 } }
-        //         );
-
-        //         if (lastApplication && lastApplication.status !== "Rejected") {
-        //             return res.status(400).send({
-        //                 message: "You have already applied. Please wait for admin review."
-        //             });
-        //         }
-
-        //         // If last application was rejected or calceled , update it
-        //         if (lastApplication && (lastApplication.status === "Rejected" || lastApplication.status === "Canceled")) {
-        //             await riderCollection.updateOne(
-        //                 { _id: lastApplication._id },
-        //                 {
-        //                     $set: {
-        //                         ...formData,
-        //                         status: "Pending",
-        //                         submittedAt: new Date()
-        //                     }
-        //                 }
-        //             );
-
-        //             // Increment application count in users collection
-        //             await userCollection.updateOne(
-        //                 { email },
-        //                 {
-        //                     $set: { IsRequestedToBeRider: "Yes" },
-        //                     $inc: { AppliedToBeRider: 1 }
-        //                 }
-        //             );
-
-        //             return res.status(200).send({ message: "Re-application submitted successfully" });
-        //         }
-
-        //         // First-time application
-        //         const newApplication = {
-        //             ...formData,
-        //             status: "Pending",
-        //             submittedAt: new Date()
-        //         };
-
-        //         await riderCollection.insertOne(newApplication);
-
-        //         // Update user record
-        //         await userCollection.updateOne(
-        //             { email },
-        //             {
-        //                 $set: { IsRequestedToBeRider: "Yes" },
-        //                 $inc: { AppliedToBeRider: 1 }
-        //             }
-        //         );
-
-        //         res.status(201).send({ message: "Application submitted successfully" });
-
-        //     } catch (error) {
-        //         console.error("Error submitting rider application:", error);
-        //         res.status(500).send({ message: "Internal server error" });
-        //     }
-        // });
-
         app.post('/apply-rider', async (req, res) => {
             try {
                 const formData = req.body;
@@ -268,8 +190,7 @@ async function run() {
             }
         });
 
-
-        // API: Get rider application by email
+        // API: Get rider application data by email for merchant user
         app.get('/rider-form/:email', async (req, res) => {
             try {
                 const { email } = req.params;
@@ -293,7 +214,7 @@ async function run() {
             }
         });
 
-        // API: Cancel rider application
+        // API: Cancel rider application by marchant user
         app.patch('/rider-form/:email/cancel', async (req, res) => {
             try {
                 const { email } = req.params;
@@ -344,8 +265,197 @@ async function run() {
             }
         });
 
+        // ADMIN API: View All Rider Applications
+        app.get('/admin/rider-applications', verifyJWT, async (req, res) => {
+            try {
+                const applications = await riderCollection
+                    .find({})
+                    .sort({ firstSubmittedAt: 1 }) // earliest first
+                    .toArray();
+
+                const formatted = applications.map(app => ({
+                    _id: app._id?.toString() ?? null,
+                    name: app.name ?? "N/A",
+                    age: app.age ?? "N/A",
+                    email: app.email ?? "N/A",
+                    region: app.region ?? "N/A",
+                    nid: app.nid ?? "N/A",
+                    contact: app.contact ?? "N/A",
+                    gender: app.gender ?? "N/A",
+                    dob: app.dob ?? "N/A",
+                    nidLink: app.nidLink ?? "N/A",
+                    district: app.district ?? "N/A",
+                    hasLicense: app.hasLicense ?? "No",
+                    licenseType: app.licenseType ?? "N/A",
+                    vehicleType: app.vehicleType ?? "N/A",
+                    licenseExpiry: app.licenseExpiry ?? "N/A",
+                    status: app.status ?? "Pending",
+                    submittedAt: app.submittedAt ?? null,
+                    firstSubmittedAt: app.firstSubmittedAt ?? app.submittedAt ?? null,
+                    canceledAt: app.canceledAt ?? null,
+                    feedback: app.feedback ?? "No feedback yet"
+                }));
+
+                res.status(200).send(formatted);
+            } catch (error) {
+                console.error("Error fetching rider applications:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        // ADMIN API:  Actions on Rider Applications (Approve/Reject)
+        app.patch('/admin/rider-applications/:email/status', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const { status, feedback } = req.body;
+
+                if (!["Approved", "Rejected"].includes(status)) {
+                    return res.status(400).send({ message: "Invalid status" });
+                }
+
+                const latestApp = await riderCollection.findOne({ email }, { sort: { submittedAt: -1 } });
+                if (!latestApp) {
+                    return res.status(404).send({ message: "Application not found" });
+                }
+
+                await riderCollection.updateOne(
+                    { _id: latestApp._id },
+                    {
+                        $set: {
+                            status,
+                            feedback: feedback ?? "No feedback provided"
+                        }
+                    }
+                );
+
+                // Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: `${status} Rider Application`,
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: feedback ?? "No feedback provided"
+                });
+
+                res.status(200).send({ message: `Application marked as ${status}` });
+            } catch (error) {
+                console.error("Error updating application status:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        // ADMIN API: Pause/ Resume rider application submission (like currently no receiving any form)
+        app.patch('/admin/rider-submission-control', verifyJWT, async (req, res) => {
+            try {
+                const { paused } = req.body;
+
+                await db.collection("system_config").updateOne(
+                    { key: "riderSubmission" },
+                    { $set: { paused } },
+                    { upsert: true }
+                );
+
+                //  Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: paused ? "Paused Rider Submission" : "Resumed Rider Submission",
+                    targetEmail: "System-wide",
+                    timestamp: new Date(),
+                    details: `Admin ${paused ? "paused" : "resumed"} rider application intake`
+                });
+
+                res.status(200).send({ message: paused ? "Submission paused" : "Submission resumed" });
+            } catch (error) {
+                console.error("Error updating submission control:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        // ADMIN API: get control 
+        app.get('/admin/rider-submission-control', verifyJWT, async (req, res) => {
+            try {
+                const config = await db.collection("system_config").findOne({ key: "riderSubmission" });
+                res.status(200).send({ paused: config?.paused ?? false });
+            } catch (error) {
+                console.error("Error fetching submission config:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
 
 
+        // ADMIN API: Admin can Restrict any specific user from submitting rider application 
+        app.patch('/admin/restrict-user/:email', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const { restricted } = req.body;
+
+                await userCollection.updateOne(
+                    { email },
+                    { $set: { riderFormRestricted: restricted } }
+                );
+
+                //  Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: restricted ? "Restricted Rider Form Access" : "Unblocked Rider Form Access",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Admin ${restricted ? "blocked" : "unblocked"} user from submitting rider application`
+                });
+
+                res.status(200).send({ message: restricted ? "User restricted from applying" : "User unblocked" });
+            } catch (error) {
+                console.error("Error updating user restriction:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+
+        // ADMIN API: deleted rider application data 
+        app.delete('/admin/rider-applications/:email', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                const latestApp = await riderCollection.findOne({ email }, { sort: { submittedAt: -1 } });
+                if (!latestApp) {
+                    return res.status(404).send({ message: "Application not found" });
+                }
+
+                await riderCollection.deleteOne({ _id: latestApp._id });
+
+                // Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Deleted Rider Application",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Admin deleted rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}`
+                });
+
+                res.status(200).send({ message: "Application deleted successfully" });
+            } catch (error) {
+                console.error("Error deleting application:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+
+        // ***** Log Releted API ***** ///
+
+        // get all log data (Admin only) 
+        app.get('/admin/logs', verifyJWT, async (req, res) => {
+            try {
+                const logs = await db.collection("admin_logs")
+                    .find({})
+                    .sort({ timestamp: -1 }) // latest first
+                    .toArray();
+
+                res.status(200).send(logs);
+            } catch (error) {
+                console.error("Error fetching admin logs:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
 
 
         // ***** Parcel Releted API ***** ///
@@ -464,7 +574,7 @@ async function run() {
             }
         });
 
-        // API: Delete parcel //
+        // API: Delete parcel by merchant user //
         app.delete("/parcels/:id", async (req, res) => {
             try {
                 const { id } = req.params;
@@ -639,7 +749,7 @@ async function run() {
             }
         });
 
-        // API: Create or update user 
+        // API: Create & update user information 
         app.post('/users', async (req, res) => {
             try {
                 const user = { ...req.body };
@@ -670,7 +780,7 @@ async function run() {
             }
         });
 
-        // API: Get all users
+        // API: Get all users data
         app.get('/users', verifyJWT, async (req, res) => {
             try {
                 const users = await userCollection.find().toArray();
@@ -681,7 +791,7 @@ async function run() {
             }
         });
 
-        // API: Get user by email
+        // API: Get specific user data by their email
         app.get('/users/:email', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -698,6 +808,26 @@ async function run() {
         });
 
         // ADMIN API: update the role of the users 
+        // app.patch('/users/:email/role', verifyJWT, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+        //         const { role } = req.body;
+
+        //         if (!role) {
+        //             return res.status(400).send({ message: "Role is required" });
+        //         }
+
+        //         const result = await userCollection.updateOne(
+        //             { email },
+        //             { $set: { role } }
+        //         );
+
+        //         res.status(200).send({ message: "Role updated successfully" });
+        //     } catch (error) {
+        //         console.error("Error updating role:", error);
+        //         res.status(500).send({ message: "Failed to update role" });
+        //     }
+        // });
         app.patch('/users/:email/role', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -712,6 +842,15 @@ async function run() {
                     { $set: { role } }
                 );
 
+                // Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Updated User Role",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Role changed to "${role}"`
+                });
+
                 res.status(200).send({ message: "Role updated successfully" });
             } catch (error) {
                 console.error("Error updating role:", error);
@@ -719,19 +858,47 @@ async function run() {
             }
         });
 
-        // ADMIN API: restrict users 
+
+        // ADMIN API: restrict users from accessing the system (can not log in) 
+        // app.patch('/users/:email/restrict', verifyJWT, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+        //         const { restricted } = req.body;
+
+        //         // ✅ Fetch user first
+        //         const user = await userCollection.findOne({ email });
+        //         if (!user) {
+        //             return res.status(404).send({ message: "User not found" });
+        //         }
+
+        //         // ✅ Prevent restriction if user is admin
+        //         if (user.role === "admin") {
+        //             return res.status(403).send({ message: "Admin users cannot be restricted" });
+        //         }
+
+        //         await userCollection.updateOne(
+        //             { email },
+        //             { $set: { isRestricted: restricted } }
+        //         );
+
+        //         res.status(200).send({ message: restricted ? "User restricted" : "User unblocked" });
+        //     } catch (error) {
+        //         console.error("Error updating restriction:", error);
+        //         res.status(500).send({ message: "Failed to update restriction" });
+        //     }
+        // });
         app.patch('/users/:email/restrict', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
                 const { restricted } = req.body;
 
-                // ✅ Fetch user first
+                //  Fetch user first
                 const user = await userCollection.findOne({ email });
                 if (!user) {
                     return res.status(404).send({ message: "User not found" });
                 }
 
-                // ✅ Prevent restriction if user is admin
+                //  Prevent restriction if user is admin
                 if (user.role === "admin") {
                     return res.status(403).send({ message: "Admin users cannot be restricted" });
                 }
@@ -741,6 +908,15 @@ async function run() {
                     { $set: { isRestricted: restricted } }
                 );
 
+                //  Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: restricted ? "Restricted System Access" : "Unblocked System Access",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Admin ${restricted ? "blocked" : "unblocked"} user from logging into the system`
+                });
+
                 res.status(200).send({ message: restricted ? "User restricted" : "User unblocked" });
             } catch (error) {
                 console.error("Error updating restriction:", error);
@@ -748,23 +924,56 @@ async function run() {
             }
         });
 
-        //ADMIN API: Delete users data from DB 
+
+        //ADMIN API: Delete users data from DB permanently 
+        // app.delete('/users/:email', verifyJWT, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+
+        //         // ✅ Fetch user first
+        //         const user = await userCollection.findOne({ email });
+        //         if (!user) {
+        //             return res.status(404).send({ message: "User not found" });
+        //         }
+
+        //         // ✅ Prevent deletion if user is admin
+        //         if (user.role === "admin") {
+        //             return res.status(403).send({ message: "Admin users cannot be deleted" });
+        //         }
+
+        //         const result = await userCollection.deleteOne({ email });
+
+        //         res.status(200).send({ message: "User deleted successfully" });
+        //     } catch (error) {
+        //         console.error("Error deleting user:", error);
+        //         res.status(500).send({ message: "Failed to delete user" });
+        //     }
+        // });
         app.delete('/users/:email', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
 
-                // ✅ Fetch user first
+                //  Fetch user first
                 const user = await userCollection.findOne({ email });
                 if (!user) {
                     return res.status(404).send({ message: "User not found" });
                 }
 
-                // ✅ Prevent deletion if user is admin
+                //  Prevent deletion if user is admin
                 if (user.role === "admin") {
                     return res.status(403).send({ message: "Admin users cannot be deleted" });
                 }
 
                 const result = await userCollection.deleteOne({ email });
+
+                //  Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Deleted User Account",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Admin permanently deleted user with role "${user.role}" and contact "${user.contactNo ?? "N/A"}"`
+                });
 
                 res.status(200).send({ message: "User deleted successfully" });
             } catch (error) {
@@ -772,8 +981,6 @@ async function run() {
                 res.status(500).send({ message: "Failed to delete user" });
             }
         });
-
-
 
 
 
@@ -788,7 +995,6 @@ async function run() {
     }
 }
 run().catch(console.dir);
-
 
 app.get('/', (req, res) => {
     res.send("Parcel server is running");
