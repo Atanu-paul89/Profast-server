@@ -43,25 +43,6 @@ const client = new MongoClient(uri, {
     }
 });
 
-//jwt middle ware // 
-const verifyJWT = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-        return res.status(401).send({ message: "Unauthorized access" });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    jwt.verify(token, secret, (err, decoded) => {
-        if (err) {
-            return res.status(403).send({ message: "Forbidden access" });
-        }
-
-        req.decoded = decoded;
-        next();
-    });
-};
 
 
 async function run() {
@@ -74,12 +55,49 @@ async function run() {
         const trackingCollection = db.collection('tracking');
         const riderCollection = db.collection('rider_form');
 
-        // ***** jwt security API ***** //
+        // ***** jwt config & API  ***** //
+        // jwt middle ware // 
+        const verifyJWT = async (req, res, next) => {
+            const authHeader = req.headers.authorization;
+
+            if (!authHeader) {
+                return res.status(401).send({ message: "Unauthorized access" });
+            }
+
+            const token = authHeader.split(' ')[1];
+
+            jwt.verify(token, secret, async (err, decoded) => {
+                if (err) {
+                    return res.status(403).send({ message: "Forbidden access" });
+                }
+
+                req.decoded = decoded;
+
+                // ✅ Check if user is restricted
+                const user = await userCollection.findOne({ email: decoded.email });
+                if (user?.isRestricted) {
+                    return res.status(403).send({ message: "Access denied. User is restricted." });
+                }
+                next();
+            });
+        };
+
+        // jwt security API // 
         app.post('/jwt', async (req, res) => {
             const { email } = req.body;
 
             if (!email) {
                 return res.status(400).send({ message: "Email is required" });
+            }
+
+            // ✅ Check if user is restricted
+            const user = await userCollection.findOne({ email });
+            if (!user) {
+                return res.status(404).send({ message: "User not found" });
+            }
+
+            if (user.isRestricted) {
+                return res.status(403).send({ message: "Access denied. Your account is restricted." });
             }
 
             const token = jwt.sign({ email }, secret, { expiresIn: '1h' });
@@ -229,7 +247,7 @@ async function run() {
                     ...formData,
                     status: "Pending",
                     submittedAt: now,
-                    firstSubmittedAt: now 
+                    firstSubmittedAt: now
                 };
 
                 await riderCollection.insertOne(newApplication);
@@ -678,6 +696,85 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch user" });
             }
         });
+
+        // ADMIN API: update the role of the users 
+        app.patch('/users/:email/role', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const { role } = req.body;
+
+                if (!role) {
+                    return res.status(400).send({ message: "Role is required" });
+                }
+
+                const result = await userCollection.updateOne(
+                    { email },
+                    { $set: { role } }
+                );
+
+                res.status(200).send({ message: "Role updated successfully" });
+            } catch (error) {
+                console.error("Error updating role:", error);
+                res.status(500).send({ message: "Failed to update role" });
+            }
+        });
+
+        // ADMIN API: restrict users 
+        app.patch('/users/:email/restrict', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const { restricted } = req.body;
+
+                // ✅ Fetch user first
+                const user = await userCollection.findOne({ email });
+                if (!user) {
+                    return res.status(404).send({ message: "User not found" });
+                }
+
+                // ✅ Prevent restriction if user is admin
+                if (user.role === "admin") {
+                    return res.status(403).send({ message: "Admin users cannot be restricted" });
+                }
+
+                await userCollection.updateOne(
+                    { email },
+                    { $set: { isRestricted: restricted } }
+                );
+
+                res.status(200).send({ message: restricted ? "User restricted" : "User unblocked" });
+            } catch (error) {
+                console.error("Error updating restriction:", error);
+                res.status(500).send({ message: "Failed to update restriction" });
+            }
+        });
+
+        //ADMIN API: Delete users data from DB 
+        app.delete('/users/:email', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                // ✅ Fetch user first
+                const user = await userCollection.findOne({ email });
+                if (!user) {
+                    return res.status(404).send({ message: "User not found" });
+                }
+
+                // ✅ Prevent deletion if user is admin
+                if (user.role === "admin") {
+                    return res.status(403).send({ message: "Admin users cannot be deleted" });
+                }
+
+                const result = await userCollection.deleteOne({ email });
+
+                res.status(200).send({ message: "User deleted successfully" });
+            } catch (error) {
+                console.error("Error deleting user:", error);
+                res.status(500).send({ message: "Failed to delete user" });
+            }
+        });
+
+
+
 
 
         // testing if server is running or not : but need to comment before deploying on varcel
