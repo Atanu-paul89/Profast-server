@@ -90,6 +90,84 @@ async function run() {
         // ***** Rider Releted API ***** // 
 
         // API: save rider-form data to db // 
+        // app.post('/apply-rider', async (req, res) => {
+        //     try {
+        //         const formData = req.body;
+        //         const email = formData.email;
+
+        //         if (!email) {
+        //             return res.status(400).send({ message: "Email is required" });
+        //         }
+
+        //         // Check if user exists in users collection
+        //         const user = await userCollection.findOne({ email });
+        //         if (!user) {
+        //             return res.status(404).send({ message: "User not found" });
+        //         }
+
+        //         // Check if user has already applied
+        //         const lastApplication = await riderCollection.findOne(
+        //             { email },
+        //             { sort: { submittedAt: -1 } }
+        //         );
+
+        //         if (lastApplication && lastApplication.status !== "Rejected") {
+        //             return res.status(400).send({
+        //                 message: "You have already applied. Please wait for admin review."
+        //             });
+        //         }
+
+        //         // If last application was rejected or calceled , update it
+        //         if (lastApplication && (lastApplication.status === "Rejected" || lastApplication.status === "Canceled")) {
+        //             await riderCollection.updateOne(
+        //                 { _id: lastApplication._id },
+        //                 {
+        //                     $set: {
+        //                         ...formData,
+        //                         status: "Pending",
+        //                         submittedAt: new Date()
+        //                     }
+        //                 }
+        //             );
+
+        //             // Increment application count in users collection
+        //             await userCollection.updateOne(
+        //                 { email },
+        //                 {
+        //                     $set: { IsRequestedToBeRider: "Yes" },
+        //                     $inc: { AppliedToBeRider: 1 }
+        //                 }
+        //             );
+
+        //             return res.status(200).send({ message: "Re-application submitted successfully" });
+        //         }
+
+        //         // First-time application
+        //         const newApplication = {
+        //             ...formData,
+        //             status: "Pending",
+        //             submittedAt: new Date()
+        //         };
+
+        //         await riderCollection.insertOne(newApplication);
+
+        //         // Update user record
+        //         await userCollection.updateOne(
+        //             { email },
+        //             {
+        //                 $set: { IsRequestedToBeRider: "Yes" },
+        //                 $inc: { AppliedToBeRider: 1 }
+        //             }
+        //         );
+
+        //         res.status(201).send({ message: "Application submitted successfully" });
+
+        //     } catch (error) {
+        //         console.error("Error submitting rider application:", error);
+        //         res.status(500).send({ message: "Internal server error" });
+        //     }
+        // });
+
         app.post('/apply-rider', async (req, res) => {
             try {
                 const formData = req.body;
@@ -99,38 +177,41 @@ async function run() {
                     return res.status(400).send({ message: "Email is required" });
                 }
 
-                // Check if user exists in users collection
+                // ✅ Check if user exists
                 const user = await userCollection.findOne({ email });
                 if (!user) {
                     return res.status(404).send({ message: "User not found" });
                 }
 
-                // Check if user has already applied
+                // ✅ Check latest application
                 const lastApplication = await riderCollection.findOne(
                     { email },
                     { sort: { submittedAt: -1 } }
                 );
 
-                if (lastApplication && lastApplication.status !== "Rejected") {
+                // ✅ Block if already applied and not rejected/canceled
+                if (lastApplication && !["Rejected", "Canceled"].includes(lastApplication.status)) {
                     return res.status(400).send({
                         message: "You have already applied. Please wait for admin review."
                     });
                 }
 
-                // If last application was rejected, update it
-                if (lastApplication && lastApplication.status === "Rejected") {
+                // ✅ Re-application: preserve original date
+                if (lastApplication && ["Rejected", "Canceled"].includes(lastApplication.status)) {
+                    const firstSubmittedAt = lastApplication.firstSubmittedAt || lastApplication.submittedAt;
+
                     await riderCollection.updateOne(
                         { _id: lastApplication._id },
                         {
                             $set: {
                                 ...formData,
                                 status: "Pending",
-                                submittedAt: new Date()
+                                submittedAt: new Date(),
+                                firstSubmittedAt // ✅ Preserve original date
                             }
                         }
                     );
 
-                    // Increment application count in users collection
                     await userCollection.updateOne(
                         { email },
                         {
@@ -142,16 +223,17 @@ async function run() {
                     return res.status(200).send({ message: "Re-application submitted successfully" });
                 }
 
-                // First-time application
+                // ✅ First-time application
+                const now = new Date();
                 const newApplication = {
                     ...formData,
                     status: "Pending",
-                    submittedAt: new Date()
+                    submittedAt: now,
+                    firstSubmittedAt: now 
                 };
 
                 await riderCollection.insertOne(newApplication);
 
-                // Update user record
                 await userCollection.updateOne(
                     { email },
                     {
@@ -167,6 +249,7 @@ async function run() {
                 res.status(500).send({ message: "Internal server error" });
             }
         });
+
 
         // API: Get rider application by email
         app.get('/rider-form/:email', async (req, res) => {
@@ -191,6 +274,58 @@ async function run() {
                 res.status(500).send({ message: "Internal server error" });
             }
         });
+
+        // API: Cancel rider application
+        app.patch('/rider-form/:email/cancel', async (req, res) => {
+            try {
+                const { email } = req.params;
+
+                if (!email) {
+                    return res.status(400).send({ message: "Email is required" });
+                }
+
+                // Find latest application
+                const lastApplication = await riderCollection.findOne(
+                    { email },
+                    { sort: { submittedAt: -1 } }
+                );
+
+                if (!lastApplication) {
+                    return res.status(404).send({ message: "No application found to cancel" });
+                }
+
+                // Only Pending apps can be cancelled
+                if (lastApplication.status !== "Pending") {
+                    return res.status(400).send({
+                        message: `Cannot cancel an application with status: ${lastApplication.status}`
+                    });
+                }
+
+                // Update status → Canceled
+                await riderCollection.updateOne(
+                    { _id: lastApplication._id },
+                    {
+                        $set: {
+                            status: "Canceled",
+                            canceledAt: new Date()
+                        }
+                    }
+                );
+
+                // Update user record (keep AppliedToBeRider count, but mark as not currently requested)
+                await userCollection.updateOne(
+                    { email },
+                    { $set: { IsRequestedToBeRider: "No" } }
+                );
+
+                res.status(200).send({ message: "Application cancelled successfully" });
+
+            } catch (error) {
+                console.error("Error cancelling rider application:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
 
 
 
