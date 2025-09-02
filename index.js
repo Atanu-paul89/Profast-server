@@ -168,6 +168,31 @@ async function run() {
             }
         });
 
+        // API: Get rider application by email
+        app.get('/rider-form/:email', async (req, res) => {
+            try {
+                const { email } = req.params;
+                if (!email) {
+                    return res.status(400).send({ message: "Email is required" });
+                }
+
+                const riderApp = await riderCollection.findOne(
+                    { email },
+                    { sort: { submittedAt: -1 } } // get the latest application
+                );
+
+                if (!riderApp) {
+                    return res.status(404).send({ message: "No rider application found" });
+                }
+
+                res.status(200).send(riderApp);
+            } catch (error) {
+                console.error("Error fetching rider application:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+
 
 
         // ***** Parcel Releted API ***** ///
