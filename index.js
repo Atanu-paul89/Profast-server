@@ -54,6 +54,8 @@ async function run() {
         const riderCollection = db.collection('rider_form');
         const activeRiderCollection = db.collection('active_riders');
         const logCollection = db.collection('admin_logs');
+        const paymentCollection = db.collection('payments');
+        const notificationCollection = db.collection('notifications');
 
         // ***** jwt config & API  ***** //
 
