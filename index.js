@@ -52,6 +52,7 @@ async function run() {
         const userCollection = db.collection('users');
         const trackingCollection = db.collection('tracking');
         const riderCollection = db.collection('rider_form');
+        const activeRiderCollection = db.collection('active_riders');
         const logCollection = db.collection('admin_logs');
 
         // ***** jwt config & API  ***** //
@@ -412,32 +413,86 @@ async function run() {
 
 
         // ADMIN API: deleted rider application data 
+        // app.delete('/admin/rider-applications/:email', verifyJWT, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+
+        //         const latestApp = await riderCollection.findOne({ email }, { sort: { submittedAt: -1 } });
+        //         if (!latestApp) {
+        //             return res.status(404).send({ message: "Application not found" });
+        //         }
+
+        //         await riderCollection.deleteOne({ _id: latestApp._id });
+
+        //         // Insert audit log
+        //         await logCollection.insertOne({
+        //             adminEmail: req.decoded.email,
+        //             actionType: "Deleted Rider Application",
+        //             targetEmail: email,
+        //             timestamp: new Date(),
+        //             details: `Admin deleted rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}`
+        //         });
+
+        //         res.status(200).send({ message: "Application deleted successfully" });
+        //     } catch (error) {
+        //         console.error("Error deleting application:", error);
+        //         res.status(500).send({ message: "Internal server error" });
+        //     }
+        // });
         app.delete('/admin/rider-applications/:email', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
 
+                // ✅ Find latest rider application
                 const latestApp = await riderCollection.findOne({ email }, { sort: { submittedAt: -1 } });
                 if (!latestApp) {
                     return res.status(404).send({ message: "Application not found" });
                 }
 
+                // ✅ Prevent deletion unless status is "Rejected" or "Approved"
+                if (latestApp.status !== "Rejected" && latestApp.status !== "Approved") {
+                    return res.status(403).send({ message: "Cannot delete application unless it is approved or rejected first." });
+                }
+
+                // ✅ Determine status flag
+                const statusFlag =
+                    latestApp.status === "Rejected"
+                        ? "Rejected & Application Deleted"
+                        : "Approved & Application Deleted";
+
+                // ✅ Delete the application
                 await riderCollection.deleteOne({ _id: latestApp._id });
 
-                // Insert audit log
+                // ✅ Update user flags and feedback
+                await userCollection.updateOne(
+                    { email },
+                    {
+                        $set: {
+                            IsRequestedToBeRider: statusFlag,
+                            LastRiderApplicationSubmittedAt: latestApp.firstSubmittedAt ?? latestApp.submittedAt,
+                            LastRiderApplyFeedback: latestApp.feedback ?? "No feedback provided"
+                        }
+                    }
+                );
+
+                // ✅ Insert audit log
                 await logCollection.insertOne({
                     adminEmail: req.decoded.email,
                     actionType: "Deleted Rider Application",
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: `Admin deleted rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}`
+                    details: `Admin deleted ${latestApp.status.toLowerCase()} rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}, transferred feedback to user profile, and updated status flags`
                 });
 
-                res.status(200).send({ message: "Application deleted successfully" });
+                res.status(200).send({ message: "Application deleted and user profile updated." });
             } catch (error) {
                 console.error("Error deleting application:", error);
                 res.status(500).send({ message: "Internal server error" });
             }
         });
+
+
+
 
 
         // ***** Log Releted API ***** ///
@@ -496,7 +551,7 @@ async function run() {
                 // Save parcel
                 const result = await parcelCollection.insertOne(newParcel);
 
-                // ✅ Add initial tracking log
+                // Add initial tracking log
                 if (result.insertedId) {
                     await trackingCollection.insertOne({
                         tracking_Id: newParcel.trackingId || newParcel.tracking_Id, // handle both naming styles
@@ -560,7 +615,7 @@ async function run() {
                         .send({ message: "Parcel can only be cancelled within 8 hours for same region but different hub." });
                 }
 
-                // ✅ Update status
+                // Update status
                 const result = await parcelCollection.updateOne(
                     { _id: new ObjectId(id) },
                     { $set: { status: "Cancelled" } }
@@ -656,7 +711,7 @@ async function run() {
 
             const result = await trackingCollection.insertOne(log);
 
-            // ✅ Always update parcel's latest status
+            // Always update parcel's latest status
             if (parcel_id) {
                 await parcelCollection.updateOne(
                     { _id: new ObjectId(parcel_id) },
@@ -737,7 +792,7 @@ async function run() {
                             return res.status(500).json({ message: "Upload failed" });
                         }
 
-                        // ✅ Send back the secure URL
+                        // Send back the secure URL
                         res.status(200).json({ url: result.secure_url });
                     }
                 );
@@ -808,26 +863,6 @@ async function run() {
         });
 
         // ADMIN API: update the role of the users 
-        // app.patch('/users/:email/role', verifyJWT, async (req, res) => {
-        //     try {
-        //         const email = req.params.email;
-        //         const { role } = req.body;
-
-        //         if (!role) {
-        //             return res.status(400).send({ message: "Role is required" });
-        //         }
-
-        //         const result = await userCollection.updateOne(
-        //             { email },
-        //             { $set: { role } }
-        //         );
-
-        //         res.status(200).send({ message: "Role updated successfully" });
-        //     } catch (error) {
-        //         console.error("Error updating role:", error);
-        //         res.status(500).send({ message: "Failed to update role" });
-        //     }
-        // });
         app.patch('/users/:email/role', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -860,33 +895,6 @@ async function run() {
 
 
         // ADMIN API: restrict users from accessing the system (can not log in) 
-        // app.patch('/users/:email/restrict', verifyJWT, async (req, res) => {
-        //     try {
-        //         const email = req.params.email;
-        //         const { restricted } = req.body;
-
-        //         // ✅ Fetch user first
-        //         const user = await userCollection.findOne({ email });
-        //         if (!user) {
-        //             return res.status(404).send({ message: "User not found" });
-        //         }
-
-        //         // ✅ Prevent restriction if user is admin
-        //         if (user.role === "admin") {
-        //             return res.status(403).send({ message: "Admin users cannot be restricted" });
-        //         }
-
-        //         await userCollection.updateOne(
-        //             { email },
-        //             { $set: { isRestricted: restricted } }
-        //         );
-
-        //         res.status(200).send({ message: restricted ? "User restricted" : "User unblocked" });
-        //     } catch (error) {
-        //         console.error("Error updating restriction:", error);
-        //         res.status(500).send({ message: "Failed to update restriction" });
-        //     }
-        // });
         app.patch('/users/:email/restrict', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -926,29 +934,6 @@ async function run() {
 
 
         //ADMIN API: Delete users data from DB permanently 
-        // app.delete('/users/:email', verifyJWT, async (req, res) => {
-        //     try {
-        //         const email = req.params.email;
-
-        //         // ✅ Fetch user first
-        //         const user = await userCollection.findOne({ email });
-        //         if (!user) {
-        //             return res.status(404).send({ message: "User not found" });
-        //         }
-
-        //         // ✅ Prevent deletion if user is admin
-        //         if (user.role === "admin") {
-        //             return res.status(403).send({ message: "Admin users cannot be deleted" });
-        //         }
-
-        //         const result = await userCollection.deleteOne({ email });
-
-        //         res.status(200).send({ message: "User deleted successfully" });
-        //     } catch (error) {
-        //         console.error("Error deleting user:", error);
-        //         res.status(500).send({ message: "Failed to delete user" });
-        //     }
-        // });
         app.delete('/users/:email', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
