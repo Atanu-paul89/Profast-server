@@ -413,32 +413,6 @@ async function run() {
 
 
         // ADMIN API: deleted rider application data 
-        // app.delete('/admin/rider-applications/:email', verifyJWT, async (req, res) => {
-        //     try {
-        //         const email = req.params.email;
-
-        //         const latestApp = await riderCollection.findOne({ email }, { sort: { submittedAt: -1 } });
-        //         if (!latestApp) {
-        //             return res.status(404).send({ message: "Application not found" });
-        //         }
-
-        //         await riderCollection.deleteOne({ _id: latestApp._id });
-
-        //         // Insert audit log
-        //         await logCollection.insertOne({
-        //             adminEmail: req.decoded.email,
-        //             actionType: "Deleted Rider Application",
-        //             targetEmail: email,
-        //             timestamp: new Date(),
-        //             details: `Admin deleted rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}`
-        //         });
-
-        //         res.status(200).send({ message: "Application deleted successfully" });
-        //     } catch (error) {
-        //         console.error("Error deleting application:", error);
-        //         res.status(500).send({ message: "Internal server error" });
-        //     }
-        // });
         app.delete('/admin/rider-applications/:email', verifyJWT, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -449,30 +423,43 @@ async function run() {
                     return res.status(404).send({ message: "Application not found" });
                 }
 
-                // ✅ Prevent deletion unless status is "Rejected" or "Approved"
-                if (latestApp.status !== "Rejected" && latestApp.status !== "Approved") {
-                    return res.status(403).send({ message: "Cannot delete application unless it is approved or rejected first." });
+                // ✅ Prevent deletion unless status is "Rejected", "Approved", or "Canceled"
+                if (
+                    latestApp.status !== "Rejected" &&
+                    latestApp.status !== "Approved" &&
+                    latestApp.status !== "Canceled"
+                ) {
+                    return res.status(403).send({ message: "Cannot delete application unless it is approved, rejected, or canceled." });
                 }
 
                 // ✅ Determine status flag
-                const statusFlag =
-                    latestApp.status === "Rejected"
-                        ? "Rejected & Application Deleted"
-                        : "Approved & Application Deleted";
+                let statusFlag = "No";
+                if (latestApp.status === "Rejected") {
+                    statusFlag = "Rejected & Application Deleted";
+                } else if (latestApp.status === "Approved") {
+                    statusFlag = "Approved & Application Deleted";
+                } else if (latestApp.status === "Canceled") {
+                    statusFlag = "Canceled & Application Deleted";
+                }
 
                 // ✅ Delete the application
                 await riderCollection.deleteOne({ _id: latestApp._id });
 
+                // ✅ Build update payload conditionally
+                const updatePayload = {
+                    IsRequestedToBeRider: statusFlag,
+                    LastRiderApplicationSubmittedAt: latestApp.firstSubmittedAt ?? latestApp.submittedAt,
+                    LastRiderApplyFeedback: latestApp.feedback ?? "No feedback provided"
+                };
+
+                if (latestApp.canceledAt) {
+                    updatePayload.LastCanceledAt = latestApp.canceledAt;
+                }
+
                 // ✅ Update user flags and feedback
                 await userCollection.updateOne(
                     { email },
-                    {
-                        $set: {
-                            IsRequestedToBeRider: statusFlag,
-                            LastRiderApplicationSubmittedAt: latestApp.firstSubmittedAt ?? latestApp.submittedAt,
-                            LastRiderApplyFeedback: latestApp.feedback ?? "No feedback provided"
-                        }
-                    }
+                    { $set: updatePayload }
                 );
 
                 // ✅ Insert audit log
@@ -490,7 +477,6 @@ async function run() {
                 res.status(500).send({ message: "Internal server error" });
             }
         });
-
 
 
 
