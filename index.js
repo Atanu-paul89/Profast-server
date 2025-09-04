@@ -228,7 +228,7 @@ async function run() {
         });
 
         // API: Cancel rider application by marchant user
-        app.patch('/rider-form/:email/cancel',verifyJWT, async (req, res) => {
+        app.patch('/rider-form/:email/cancel', verifyJWT, async (req, res) => {
             try {
                 const { email } = req.params;
 
@@ -836,11 +836,28 @@ async function run() {
         app.delete('/admin/payments/:id', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const id = req.params.id;
+
+                //  Fetch payment record first
+                const paymentRecord = await paymentCollection.findOne({ _id: new ObjectId(id) });
+                if (!paymentRecord) {
+                    return res.status(404).send({ message: "Payment record not found" });
+                }
+
+                //  Delete after fetching
                 const result = await paymentCollection.deleteOne({ _id: new ObjectId(id) });
 
                 if (result.deletedCount === 0) {
                     return res.status(404).send({ message: "Payment record not found" });
                 }
+
+                //  Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Deleted Payment Record",
+                    targetEmail: paymentRecord.payerEmail,
+                    timestamp: new Date(),
+                    details: `Admin deleted payment record for parcel ${paymentRecord.trackingId} paid by ${paymentRecord.payerEmail}`
+                });
 
                 res.status(200).send({ message: "Payment record deleted successfully" });
             } catch (error) {
@@ -849,7 +866,8 @@ async function run() {
             }
         });
 
-        //temporary api to redirect users data // [worked fine, data moved *****] 
+
+        //temporary api to redirect users payment  data to new collection // [worked fine, data moved *****] 
         // app.post('/admin/migrate-payments', verifyJWT, verifyAdmin, async (req, res) => {
         //     try {
         //         const paidParcels = await parcelCollection.find({ paymentStatus: "Paid" }).toArray();
