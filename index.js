@@ -108,6 +108,16 @@ async function run() {
             res.send({ token });
         });
 
+        // ***** ADMIN setup and verified ***** // 
+        const verifyAdmin = async (req, res, next) => {
+            const user = await userCollection.findOne({ email: req.decoded.email });
+            if (user?.role !== "admin") {
+                return res.status(403).send({ message: "Forbidden" });
+            }
+            next();
+        };
+
+
         // ***** Rider Releted API ***** // 
 
         // API: save rider-form data to db // 
@@ -194,7 +204,7 @@ async function run() {
         });
 
         // API: Get rider application data by email for merchant user
-        app.get('/rider-form/:email', async (req, res) => {
+        app.get('/rider-form/:email', verifyJWT, async (req, res) => {
             try {
                 const { email } = req.params;
                 if (!email) {
@@ -218,7 +228,7 @@ async function run() {
         });
 
         // API: Cancel rider application by marchant user
-        app.patch('/rider-form/:email/cancel', async (req, res) => {
+        app.patch('/rider-form/:email/cancel',verifyJWT, async (req, res) => {
             try {
                 const { email } = req.params;
 
@@ -269,7 +279,7 @@ async function run() {
         });
 
         // ADMIN API: View All Rider Applications
-        app.get('/admin/rider-applications', verifyJWT, async (req, res) => {
+        app.get('/admin/rider-applications', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const applications = await riderCollection
                     .find({})
@@ -307,37 +317,62 @@ async function run() {
         });
 
         // ADMIN API:  Actions on Rider Applications (Approve/Reject)
-        app.patch('/admin/rider-applications/:email/status', verifyJWT, async (req, res) => {
+        app.patch('/admin/rider-applications/:email/status', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
                 const { status, feedback } = req.body;
 
+                // ✅ Validate status
                 if (!["Approved", "Rejected"].includes(status)) {
                     return res.status(400).send({ message: "Invalid status" });
                 }
 
+                // ✅ Find latest application
                 const latestApp = await riderCollection.findOne({ email }, { sort: { submittedAt: -1 } });
                 if (!latestApp) {
                     return res.status(404).send({ message: "Application not found" });
                 }
 
+                // ✅ Extract first name for RiderEmail
+                const firstName = latestApp.name?.split(" ")[0]?.toLowerCase() || "rider";
+                const riderEmail = `${firstName}.rider@pf.rider.com`;
+
+                // ✅ Default feedback (always included)
+                const defaultFeedback = `Congratulations. You are selected to be rider.\nPlease create an account with following credentials:\nemail: ${riderEmail}\npassword: @Rider1234 [You can change it from profile]`;
+
+                // ✅ Combine default + admin feedback
+                const finalFeedback = feedback
+                    ? `${defaultFeedback}\n\nAdditional Note:\n${feedback}`
+                    : defaultFeedback;
+
+                // ✅ Update application status and feedback
                 await riderCollection.updateOne(
                     { _id: latestApp._id },
                     {
                         $set: {
                             status,
-                            feedback: feedback ?? "No feedback provided"
+                            feedback: finalFeedback
                         }
                     }
                 );
 
-                // Insert audit log
+                // ✅ Promote to active_riders if approved
+                if (status === "Approved") {
+                    await activeRiderCollection.insertOne({
+                        ...latestApp,
+                        riderStatus: "Active",
+                        PromotedToRiderAt: new Date(),
+                        RiderEmail: riderEmail
+                    });
+                }
+
+                // ✅ Insert audit log
                 await logCollection.insertOne({
                     adminEmail: req.decoded.email,
                     actionType: `${status} Rider Application`,
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: feedback ?? "No feedback provided"
+                    details: finalFeedback
                 });
 
                 res.status(200).send({ message: `Application marked as ${status}` });
@@ -347,8 +382,9 @@ async function run() {
             }
         });
 
+
         // ADMIN API: Pause/ Resume rider application submission (like currently no receiving any form)
-        app.patch('/admin/rider-submission-control', verifyJWT, async (req, res) => {
+        app.patch('/admin/rider-submission-control', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const { paused } = req.body;
 
@@ -375,7 +411,7 @@ async function run() {
         });
 
         // ADMIN API: get control 
-        app.get('/admin/rider-submission-control', verifyJWT, async (req, res) => {
+        app.get('/admin/rider-submission-control', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const config = await db.collection("system_config").findOne({ key: "riderSubmission" });
                 res.status(200).send({ paused: config?.paused ?? false });
@@ -385,9 +421,8 @@ async function run() {
             }
         });
 
-
         // ADMIN API: Admin can Restrict any specific user from submitting rider application 
-        app.patch('/admin/restrict-user/:email', verifyJWT, async (req, res) => {
+        app.patch('/admin/restrict-user/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
                 const { restricted } = req.body;
@@ -413,9 +448,8 @@ async function run() {
             }
         });
 
-
         // ADMIN API: deleted rider application data 
-        app.delete('/admin/rider-applications/:email', verifyJWT, async (req, res) => {
+        app.delete('/admin/rider-applications/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
 
@@ -486,7 +520,7 @@ async function run() {
         // ***** Log Releted API ***** ///
 
         // get all log data (Admin only) 
-        app.get('/admin/logs', verifyJWT, async (req, res) => {
+        app.get('/admin/logs', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const logs = await db.collection("admin_logs")
                     .find({})
@@ -527,7 +561,7 @@ async function run() {
         });
 
         // API: add parcels to db & create intial tracking status //
-        app.post('/parcels', async (req, res) => {
+        app.post('/parcels', verifyJWT, async (req, res) => {
             try {
                 const newParcel = req.body;
 
@@ -558,9 +592,8 @@ async function run() {
             }
         });
 
-
         // API: Cancel parcel with rules and regulations //
-        app.patch("/parcels/:id/cancel", async (req, res) => {
+        app.patch("/parcels/:id/cancel", verifyJWT, async (req, res) => {
             try {
                 const { id } = req.params;
                 const parcel = await parcelCollection.findOne({ _id: new ObjectId(id) });
@@ -618,7 +651,7 @@ async function run() {
         });
 
         // API: Delete parcel by merchant user //
-        app.delete("/parcels/:id", async (req, res) => {
+        app.delete("/parcels/:id", verifyJWT, async (req, res) => {
             try {
                 const { id } = req.params;
                 const parcel = await parcelCollection.findOne({ _id: new ObjectId(id) });
@@ -730,36 +763,135 @@ async function run() {
         })
 
         // API: Update payment status and save payment info
-        app.patch('/parcels/:trackingId/payment', async (req, res) => {
+        app.patch('/parcels/:trackingId/payment', verifyJWT, async (req, res) => {
             try {
                 const { trackingId } = req.params;
                 const { paymentIntentId, amount, payerEmail } = req.body;
 
-                const update = {
-                    paymentStatus: "Paid",
-                    paymentInfo: {
-                        paymentIntentId,
-                        amount,
-                        paidAt: new Date(),
-                        payerEmail
-                    }
+                const parcel = await parcelCollection.findOne({ trackingId });
+                if (!parcel) {
+                    return res.status(404).send({ success: false, message: "Parcel not found" });
+                }
+
+                if (parcel.paymentStatus === "Paid") {
+                    return res.status(409).send({ success: false, message: "Parcel already paid" });
+                }
+
+                const paymentInfo = {
+                    paymentIntentId,
+                    amount,
+                    paidAt: new Date(),
+                    payerEmail
                 };
 
-                const result = await parcelCollection.updateOne(
+                // ✅ Update parcel with payment info
+                await parcelCollection.updateOne(
                     { trackingId },
-                    { $set: update }
+                    {
+                        $set: {
+                            paymentStatus: "Paid",
+                            paymentInfo
+                        }
+                    }
                 );
 
-                if (result.modifiedCount > 0) {
-                    res.send({ success: true });
-                } else {
-                    res.status(404).send({ success: false, message: "Parcel not found" });
-                }
+                // ✅ Insert into payments collection for admin
+                await paymentCollection.insertOne({
+                    paymentIntentId,
+                    amount,
+                    paidAt: new Date(),
+                    payerEmail,
+                    payerName: parcel.createdBy?.name ?? "Unknown",
+                    trackingId,
+                    parcelType: parcel.parcelType,
+                    region: parcel.senderRegion,
+                    receiverRegion: parcel.receiverRegion
+                });
+
+                res.send({ success: true });
             } catch (error) {
                 console.error("Error updating payment info:", error);
                 res.status(500).send({ success: false, message: "Failed to update payment info" });
             }
         });
+
+        // ADMIN API: View all payments by the users
+        app.get('/admin/payments/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const payments = await paymentCollection.find({ payerEmail: email }).toArray();
+
+                if (payments.length === 0) {
+                    return res.status(200).send({ message: "This user has not paid for any parcel yet", payments: [] });
+                }
+
+                res.status(200).send({ payments });
+            } catch (error) {
+                console.error("Error fetching payments:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        // ADMIN API: Delete Payment data of users 
+        app.delete('/admin/payments/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const id = req.params.id;
+                const result = await paymentCollection.deleteOne({ _id: new ObjectId(id) });
+
+                if (result.deletedCount === 0) {
+                    return res.status(404).send({ message: "Payment record not found" });
+                }
+
+                res.status(200).send({ message: "Payment record deleted successfully" });
+            } catch (error) {
+                console.error("Error deleting payment record:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //temporary api to redirect users data // [worked fine, data moved *****] 
+        // app.post('/admin/migrate-payments', verifyJWT, verifyAdmin, async (req, res) => {
+        //     try {
+        //         const paidParcels = await parcelCollection.find({ paymentStatus: "Paid" }).toArray();
+
+        //         const migratedPayments = [];
+
+        //         for (const parcel of paidParcels) {
+        //             const paymentInfo = parcel.paymentInfo;
+        //             if (!paymentInfo || !paymentInfo.paymentIntentId) continue;
+
+        //             const alreadyExists = await paymentCollection.findOne({ paymentIntentId: paymentInfo.paymentIntentId });
+        //             if (alreadyExists) continue;
+
+        //             migratedPayments.push({
+        //                 paymentIntentId: paymentInfo.paymentIntentId,
+        //                 amount: paymentInfo.amount,
+        //                 paidAt: paymentInfo.paidAt,
+        //                 payerEmail: paymentInfo.payerEmail,
+        //                 payerName: parcel.createdBy?.name ?? "Unknown",
+        //                 trackingId: parcel.trackingId,
+        //                 parcelType: parcel.parcelType,
+        //                 region: parcel.senderRegion,
+        //                 receiverRegion: parcel.receiverRegion
+        //             });
+        //         }
+
+        //         if (migratedPayments.length > 0) {
+        //             await paymentCollection.insertMany(migratedPayments);
+        //         }
+
+        //         res.send({
+        //             success: true,
+        //             inserted: migratedPayments.length,
+        //             message: `${migratedPayments.length} payment records migrated successfully.`
+        //         });
+        //     } catch (error) {
+        //         console.error("Migration error:", error);
+        //         res.status(500).send({ success: false, message: "Migration failed." });
+        //     }
+        // });
+
+
 
 
         // ***** User Releted API ***** ///
@@ -851,7 +983,7 @@ async function run() {
         });
 
         // ADMIN API: update the role of the users 
-        app.patch('/users/:email/role', verifyJWT, async (req, res) => {
+        app.patch('/users/:email/role', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
                 const { role } = req.body;
@@ -883,7 +1015,7 @@ async function run() {
 
 
         // ADMIN API: restrict users from accessing the system (can not log in) 
-        app.patch('/users/:email/restrict', verifyJWT, async (req, res) => {
+        app.patch('/users/:email/restrict', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
                 const { restricted } = req.body;
@@ -922,7 +1054,7 @@ async function run() {
 
 
         //ADMIN API: Delete users data from DB permanently 
-        app.delete('/users/:email', verifyJWT, async (req, res) => {
+        app.delete('/users/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
 
