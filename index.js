@@ -50,7 +50,7 @@ async function run() {
     try {
         await client.connect();
 
-        //#region Defining all DB Collectections here 
+        //* #region Defining all DB Collectections here 
         const db = client.db('profast');
         const parcelCollection = db.collection('parcels');
         const userCollection = db.collection('users');
@@ -128,7 +128,7 @@ async function run() {
         // #endregion
 
 
-    // #region ***** Rider & Rider APllication Releted API ***** // 
+        // #region ***** Rider & Rider APllication Releted API *****  
 
         // API: save rider-form data to db // 
         app.post('/apply-rider', async (req, res) => {
@@ -355,6 +355,7 @@ async function run() {
                 //     ? `${defaultFeedback}\n\nAdditional Note:\n${feedback}`
                 //     : defaultFeedback;
                 // ✅ Build feedback based on status
+
                 let finalFeedback = "";
 
                 if (status === "Approved") {
@@ -402,6 +403,18 @@ async function run() {
                     viewedByAdmin: false
                 });
 
+                // send notifications // 
+                await notificationCollection.insertOne({
+                    title: "Rider Application Status",
+                    message: finalFeedback,
+                    type: "Application",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
+
                 res.status(200).send({ message: `Application marked as ${status}` });
             } catch (error) {
                 console.error("Error updating application status:", error);
@@ -429,6 +442,17 @@ async function run() {
                     details: `Admin ${paused ? "paused" : "resumed"} rider application intake`,
                     viewedByAdmin: false
                 });
+
+                await notificationCollection.insertOne({
+                    title: paused ? "Rider Submission Paused" : "Rider Submission Resumed",
+                    message: `Admin ${paused ? "paused" : "resumed"} rider application intake.`,
+                    type: "System",
+                    time: new Date(),
+                    system: true,
+                    fromAdmin: true,
+                    read: false
+                });
+
 
                 res.status(200).send({ message: paused ? "Submission paused" : "Submission resumed" });
             } catch (error) {
@@ -468,6 +492,17 @@ async function run() {
                     details: `Admin ${restricted ? "blocked" : "unblocked"} user from submitting rider application`,
                     viewedByAdmin: false
                 });
+
+                await notificationCollection.insertOne({
+                    title: restricted ? "Rider Form Access Restricted" : "Rider Form Access Restored",
+                    message: `You have been ${restricted ? "restricted from" : "allowed to"} submitting rider applications.`,
+                    type: "Restriction",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
 
                 res.status(200).send({ message: restricted ? "User restricted from applying" : "User unblocked" });
             } catch (error) {
@@ -641,6 +676,17 @@ async function run() {
                     });
                 }
 
+                await notificationCollection.insertOne({
+                    title: "Parcel Created",
+                    message: `Your parcel ${newParcel.parcelName} (${newParcel.trackingId}) has been successfully created and is awaiting pickup.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: newParcel.createdBy?.email || newParcel.userEmail, // adjust based on your schema
+                    fromAdmin: false,
+                    read: false
+                });
+
+
                 res.status(201).send(result);
             } catch (error) {
                 console.error("Error inserting parcel: ", error);
@@ -698,6 +744,17 @@ async function run() {
                     { $set: { status: "Cancelled" } }
                 );
 
+                await notificationCollection.insertOne({
+                    title: "Parcel Cancelled",
+                    message: `Your parcel (Tracking Id: ${parcel.trackingId}) was cancelled successfully on ${dayjs().format("D MMM YYYY h:mm A")}.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: parcel.createdBy?.email || parcel.userEmail,
+                    fromAdmin: false,
+                    read: false
+                });
+
+
                 res.send({ success: true, result });
             }
             catch (error) {
@@ -723,6 +780,17 @@ async function run() {
                 }
 
                 const result = await parcelCollection.deleteOne({ _id: new ObjectId(id) });
+
+                await notificationCollection.insertOne({
+                    title: "Parcel Deleted",
+                    message: `Your parcel ${parcel.trackingId} has been deleted from the system.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: parcel.createdBy?.email || parcel.userEmail,
+                    fromAdmin: false,
+                    read: false
+                });
+
                 res.send({ success: true, result });
             } catch (error) {
                 console.error("Error deleting parcel:", error);
@@ -755,13 +823,250 @@ async function run() {
         // #endregion *** Parcel Releted APi Ended Here *** // 
 
 
-        //#region ***** Notifications Releted API ***** /// 
+        // #region ***** Notifications, Message, Feedback Releted API ***** /// 
 
-        //
+        //! Admin's Notification Releted Api  // 
 
-        //#endregion *** Notfication Releted API Eneded here
+        //* ADMIN API: Creating Notification 
+        app.post('/admin/notifications', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const {
+                    title,
+                    message,
+                    type,
+                    toUser,
+                    toRole,
+                    system
+                } = req.body;
 
-        //#region ***** Tracking Releted API ***** ///
+                const newNotification = {
+                    title,
+                    message,
+                    type,
+                    time: new Date(),
+                    toUser: toUser || null,
+                    toRole: toRole || null,
+                    system: system || false,
+                    fromAdmin: true,
+                    read: false
+                };
+
+                const result = await notificationCollection.insertOne(newNotification);
+                res.status(201).send(result);
+            } catch (error) {
+                console.error("Error creating notification:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //* ADMIN API: Update Notification 
+        app.patch('/admin/notifications/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const id = req.params.id;
+                const updateFields = req.body;
+
+                const result = await notificationCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: updateFields }
+                );
+
+                res.status(200).send(result);
+            } catch (error) {
+                console.error("Error updating notification:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //* ADMIN API: View All Sent Notifications 
+        app.get('/admin/notifications', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const notifications = await notificationCollection
+                    .find({ fromAdmin: true })
+                    .sort({ time: -1 })
+                    .toArray();
+
+                res.status(200).send(notifications);
+            } catch (error) {
+                console.error("Error fetching notifications:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //* ADMIN API: View Notification for Specific Users 
+        app.get('/admin/notifications/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                const notifications = await notificationCollection
+                    .find({ toUser: email })
+                    .sort({ time: -1 })
+                    .toArray();
+
+                res.status(200).send(notifications);
+            } catch (error) {
+                console.error("Error fetching user notifications:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //! User's Notifications Releted Api // 
+
+        //* USer: Get own notification // 
+        app.get('/notifications', verifyJWT, async (req, res) => {
+            try {
+                const email = req.decoded.email;
+
+                const notifications = await notificationCollection
+                    .find({
+                        $or: [
+                            { toUser: email },
+                            { toRole: req.decoded.role },
+                            { system: true }
+                        ]
+                    })
+                    .sort({ time: -1 })
+                    .toArray();
+
+                res.status(200).send(notifications);
+            } catch (error) {
+                console.error("Error fetching user notifications:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //* marking Notification as read // 
+        app.patch('/notifications/:id/read', verifyJWT, async (req, res) => {
+            try {
+                const id = req.params.id;
+
+                const result = await notificationCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { read: true } }
+                );
+
+                res.status(200).send(result);
+            } catch (error) {
+                console.error("Error marking notification as read:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //! Message Releted API  // 
+
+        //* Send Message to ADmin // 
+        app.post('/notifications/message-to-admin', verifyJWT, async (req, res) => {
+            try {
+                const { title, message } = req.body;
+
+                const newMessage = {
+                    title,
+                    message,
+                    type: "Message",
+                    time: new Date(),
+                    toUser: "admin@profast.com",
+                    fromAdmin: false,
+                    read: false,
+                    senderEmail: req.decoded.email
+                };
+
+                const result = await notificationCollection.insertOne(newMessage);
+                res.status(201).send(result);
+            } catch (error) {
+                console.error("Error sending message to admin:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //* ADMIN API: Admin Reply to User's Message 
+        app.post('/admin/reply/:notificationId', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const originalId = req.params.notificationId;
+                const { title, message } = req.body;
+
+                const original = await notificationCollection.findOne({ _id: new ObjectId(originalId) });
+                if (!original || !original.senderEmail) {
+                    return res.status(404).send({ message: "Original message not found" });
+                }
+
+                const reply = {
+                    title,
+                    message,
+                    type: "Reply",
+                    time: new Date(),
+                    toUser: original.senderEmail,
+                    fromAdmin: true,
+                    read: false,
+                    replyTo: originalId
+                };
+
+                const result = await notificationCollection.insertOne(reply);
+                res.status(201).send(result);
+            } catch (error) {
+                console.error("Error sending reply:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        //! Feedback Releted API // 
+
+        //* api for posting feedback by users //
+        app.post('/feedback', verifyJWT, async (req, res) => {
+            try {
+                const {
+                    title,
+                    message,
+                    rating,
+                    parcelId,
+                    riderEmail,
+                    type // "System", "Parcel", "Rider"
+                } = req.body;
+
+                const senderEmail = req.decoded.email;
+
+                // Save feedback as a notification
+                const feedbackNotification = {
+                    title,
+                    message,
+                    type: "Feedback",
+                    time: new Date(),
+                    fromAdmin: false,
+                    read: false,
+                    senderEmail,
+                    relatedParcelId: parcelId || null,
+                    relatedRiderEmail: riderEmail || null,
+                    rating: rating || null,
+                    toUser: "admin@profast.com" // Admin always receives feedback
+                };
+
+                const result = await notificationCollection.insertOne(feedbackNotification);
+
+                // Optional: Notify rider if feedback is about them
+                if (riderEmail) {
+                    await notificationCollection.insertOne({
+                        title: "New Rider Feedback",
+                        message: `You received feedback from ${senderEmail}: "${message}"`,
+                        type: "Feedback",
+                        time: new Date(),
+                        fromAdmin: false,
+                        read: false,
+                        toUser: riderEmail,
+                        relatedParcelId: parcelId || null,
+                        rating: rating || null
+                    });
+                }
+
+                res.status(201).send({ message: "Feedback submitted successfully" });
+            } catch (error) {
+                console.error("Error submitting feedback:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+
+        //#endregion *** Notfication Releted API Eneded here ***** ///
+
+
+        //  #region ***** Tracking Releted API ***** ///
 
         // API: Get parcel by parcelId
         app.get('/tracking/:parcelId', verifyJWT, async (req, res) => {
@@ -873,6 +1178,17 @@ async function run() {
                     receiverRegion: parcel.receiverRegion
                 });
 
+                await notificationCollection.insertOne({
+                    title: "Payment Successful",
+                    message: `Your payment of Tk. ${amount} for parcel ${trackingId} was successful.`,
+                    type: "Payment",
+                    time: new Date(),
+                    toUser: payerEmail,
+                    fromAdmin: false,
+                    read: false
+                });
+
+
                 res.send({ success: true });
             } catch (error) {
                 console.error("Error updating payment info:", error);
@@ -924,6 +1240,17 @@ async function run() {
                     details: `Admin deleted payment record for parcel ${paymentRecord.trackingId} paid by ${paymentRecord.payerEmail}`,
                     viewedByAdmin: false
                 });
+
+                await notificationCollection.insertOne({
+                    title: "Payment Record Deleted",
+                    message: `Your payment record for parcel ${paymentRecord.trackingId} has been deleted by admin.`,
+                    type: "Payment",
+                    time: new Date(),
+                    toUser: paymentRecord.payerEmail,
+                    fromAdmin: true,
+                    read: false
+                });
+
 
                 res.status(200).send({ message: "Payment record deleted successfully" });
             } catch (error) {
@@ -1027,6 +1354,19 @@ async function run() {
 
                 const isNewUser = result.upsertedCount > 0;
 
+                await notificationCollection.insertOne({
+                    title: isNewUser ? "Welcome to Profast!" : "Profile Updated",
+                    message: isNewUser
+                        ? "Your account has been created successfully. You can now start using Profast."
+                        : "Your profile information has been updated.",
+                    type: isNewUser ? "Welcome" : "Profile",
+                    time: new Date(),
+                    toUser: user.email,
+                    fromAdmin: false,
+                    read: false
+                });
+
+
                 res.status(200).send({
                     success: true,
                     isNewUser,
@@ -1091,6 +1431,17 @@ async function run() {
                     viewedByAdmin: false
                 });
 
+                await notificationCollection.insertOne({
+                    title: "Role Updated",
+                    message: `Your account role has been updated to "${role}" by an admin.`,
+                    type: "Role",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
+
                 res.status(200).send({ message: "Role updated successfully" });
             } catch (error) {
                 console.error("Error updating role:", error);
@@ -1129,6 +1480,17 @@ async function run() {
                     details: `Admin ${restricted ? "blocked" : "unblocked"} user from logging into the system`,
                     viewedByAdmin: false
                 });
+
+                await notificationCollection.insertOne({
+                    title: restricted ? "Access Restricted" : "Access Restored",
+                    message: `Your account has been ${restricted ? "restricted from" : "restored to"} system access.`,
+                    type: "Restriction",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
 
                 res.status(200).send({ message: restricted ? "User restricted" : "User unblocked" });
             } catch (error) {
