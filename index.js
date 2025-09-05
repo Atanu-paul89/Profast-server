@@ -1,3 +1,4 @@
+//#region initial require parameters
 const dotenv = require('dotenv');
 dotenv.config();
 const express = require('express');
@@ -10,12 +11,14 @@ const { ObjectId } = require("mongodb");
 const jwt = require('jsonwebtoken');
 const secret = process.env.JWT_SECRET;
 
+//#endregion
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
 
+// middleware
 app.use(cors());
 app.use(express.json());
 
@@ -47,6 +50,7 @@ async function run() {
     try {
         await client.connect();
 
+        //#region Defining all DB Collectections here 
         const db = client.db('profast');
         const parcelCollection = db.collection('parcels');
         const userCollection = db.collection('users');
@@ -57,6 +61,10 @@ async function run() {
         const paymentCollection = db.collection('payments');
         const notificationCollection = db.collection('notifications');
 
+        //#endregion
+
+
+        // #region ( function of JWT configure/ admin verify / jwt middleware)
         // ***** jwt config & API  ***** //
 
         // jwt middle ware // 
@@ -117,8 +125,10 @@ async function run() {
             next();
         };
 
+        // #endregion
 
-        // ***** Rider Releted API ***** // 
+
+    // #region ***** Rider & Rider APllication Releted API ***** // 
 
         // API: save rider-form data to db // 
         app.post('/apply-rider', async (req, res) => {
@@ -399,7 +409,6 @@ async function run() {
             }
         });
 
-
         // ADMIN API: Pause/ Resume rider application submission (like currently no receiving any form)
         app.patch('/admin/rider-submission-control', verifyJWT, verifyAdmin, async (req, res) => {
             try {
@@ -534,10 +543,10 @@ async function run() {
             }
         });
 
+        // #endregion
 
 
-
-        // ***** Log Releted API ***** ///
+        // #region ***** Log Releted API ***** ///
 
         // get all log data (Admin only) 
         app.get('/admin/logs', verifyJWT, verifyAdmin, async (req, res) => {
@@ -579,9 +588,10 @@ async function run() {
             }
         });
 
+        // #endregion
 
 
-        // ***** Parcel Releted API ***** ///
+        //#region ***** Parcel Releted API ***** ///
 
         // API: Get parcels (optionally by user email)
         app.get('/parcels', verifyJWT, async (req, res) => {
@@ -742,9 +752,16 @@ async function run() {
             }
         });
 
+        // #endregion *** Parcel Releted APi Ended Here *** // 
 
 
-        // ***** Tracking Releted API ***** ///
+        //#region ***** Notifications Releted API ***** /// 
+
+        //
+
+        //#endregion *** Notfication Releted API Eneded here
+
+        //#region ***** Tracking Releted API ***** ///
 
         // API: Get parcel by parcelId
         app.get('/tracking/:parcelId', verifyJWT, async (req, res) => {
@@ -789,8 +806,10 @@ async function run() {
             res.send({ success: true, insertedId: result.insertedId });
         });
 
+        //#endregion *** Tracking Releted APi Ended Here *** //
 
-        // ***** Payment Releted API ***** ///
+
+        //#region ***** Payment Releted API ***** ///
 
         // API: Patment intending for Stripe //
         app.post('/create-payment-intent', async (req, res) => {
@@ -913,7 +932,6 @@ async function run() {
             }
         });
 
-
         //temporary api to redirect users payment  data to new collection // [worked fine, data moved *****] 
         // app.post('/admin/migrate-payments', verifyJWT, verifyAdmin, async (req, res) => {
         //     try {
@@ -956,10 +974,11 @@ async function run() {
         //     }
         // });
 
+        //#endregion *** Payment Releted Api Ended Here *** //
 
 
 
-        // ***** User Releted API ***** ///
+        //#region ***** User Releted API ***** ///
 
         // API: Upload user profile photo to Cloudinary and get the image URL
         app.post("/upload-photo", upload.single("photo"), async (req, res) => {
@@ -1079,7 +1098,6 @@ async function run() {
             }
         });
 
-
         // ADMIN API: restrict users from accessing the system (can not log in) 
         app.patch('/users/:email/restrict', verifyJWT, verifyAdmin, async (req, res) => {
             try {
@@ -1119,7 +1137,6 @@ async function run() {
             }
         });
 
-
         //ADMIN API: Delete users data from DB permanently 
         app.delete('/users/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
@@ -1154,6 +1171,8 @@ async function run() {
                 res.status(500).send({ message: "Failed to delete user" });
             }
         });
+
+        //#endregion *** User Releted API Ended Here *** //
 
 
 
