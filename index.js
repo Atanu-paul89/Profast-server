@@ -337,13 +337,29 @@ async function run() {
                 const firstName = latestApp.name?.split(" ")[0]?.toLowerCase() || "rider";
                 const riderEmail = `${firstName}.rider@pf.rider.com`;
 
-                // ✅ Default feedback (always included)
-                const defaultFeedback = `Congratulations. You are selected to be rider.\nPlease create an account with following credentials:\nemail: ${riderEmail}\npassword: @Rider1234 [You can change it from profile]`;
+                // // ✅ Default feedback (always included)
+                // const defaultFeedback = `Congratulations. You are selected to be rider.\nPlease create an account with following credentials:\nemail: ${riderEmail}\npassword: @Rider1234 [You can change it from profile]`;
 
-                // ✅ Combine default + admin feedback
-                const finalFeedback = feedback
-                    ? `${defaultFeedback}\n\nAdditional Note:\n${feedback}`
-                    : defaultFeedback;
+                // // ✅ Combine default + admin feedback
+                // const finalFeedback = feedback
+                //     ? `${defaultFeedback}\n\nAdditional Note:\n${feedback}`
+                //     : defaultFeedback;
+                // ✅ Build feedback based on status
+                let finalFeedback = "";
+
+                if (status === "Approved") {
+                    const defaultFeedback = `Congratulations. You are selected to be a rider.\nPlease create an account with the following credentials:\nemail: ${riderEmail}\npassword: @Rider1234 [You can change it from profile]`;
+
+                    finalFeedback = feedback
+                        ? `${defaultFeedback}\n\nAdditional Note:\n${feedback}`
+                        : defaultFeedback;
+                } else if (status === "Rejected") {
+                    const rejectionMessage = "We regret to inform you that your rider application has been rejected.";
+
+                    finalFeedback = feedback
+                        ? `${rejectionMessage}\n\nAdditional Note:\n${feedback}`
+                        : rejectionMessage;
+                }
 
                 // ✅ Update application status and feedback
                 await riderCollection.updateOne(
@@ -372,7 +388,8 @@ async function run() {
                     actionType: `${status} Rider Application`,
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: finalFeedback
+                    details: finalFeedback,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: `Application marked as ${status}` });
@@ -400,7 +417,8 @@ async function run() {
                     actionType: paused ? "Paused Rider Submission" : "Resumed Rider Submission",
                     targetEmail: "System-wide",
                     timestamp: new Date(),
-                    details: `Admin ${paused ? "paused" : "resumed"} rider application intake`
+                    details: `Admin ${paused ? "paused" : "resumed"} rider application intake`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: paused ? "Submission paused" : "Submission resumed" });
@@ -438,7 +456,8 @@ async function run() {
                     actionType: restricted ? "Restricted Rider Form Access" : "Unblocked Rider Form Access",
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: `Admin ${restricted ? "blocked" : "unblocked"} user from submitting rider application`
+                    details: `Admin ${restricted ? "blocked" : "unblocked"} user from submitting rider application`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: restricted ? "User restricted from applying" : "User unblocked" });
@@ -504,7 +523,8 @@ async function run() {
                     actionType: "Deleted Rider Application",
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: `Admin deleted ${latestApp.status.toLowerCase()} rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}, transferred feedback to user profile, and updated status flags`
+                    details: `Admin deleted ${latestApp.status.toLowerCase()} rider form submitted on ${new Date(latestApp.submittedAt).toLocaleDateString("en-GB")}, transferred feedback to user profile, and updated status flags`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: "Application deleted and user profile updated." });
@@ -533,6 +553,32 @@ async function run() {
                 res.status(500).send({ message: "Internal server error" });
             }
         });
+
+        // Create API to Mark Logs as Seen
+        app.patch('/admin/logs/mark-seen', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                await logCollection.updateMany(
+                    { viewedByAdmin: false },
+                    { $set: { viewedByAdmin: true } }
+                );
+                res.status(200).send({ message: "Logs marked as viewed" });
+            } catch (error) {
+                console.error("Error marking logs as seen:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        // API to Fetch Unseen Logs,  (kind of notification alert setting up)
+        app.get('/admin/logs/unseen', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const unseenLogs = await logCollection.find({ viewedByAdmin: false }).toArray();
+                res.status(200).send(unseenLogs);
+            } catch (error) {
+                console.error("Error fetching unseen logs:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
 
 
         // ***** Parcel Releted API ***** ///
@@ -856,7 +902,8 @@ async function run() {
                     actionType: "Deleted Payment Record",
                     targetEmail: paymentRecord.payerEmail,
                     timestamp: new Date(),
-                    details: `Admin deleted payment record for parcel ${paymentRecord.trackingId} paid by ${paymentRecord.payerEmail}`
+                    details: `Admin deleted payment record for parcel ${paymentRecord.trackingId} paid by ${paymentRecord.payerEmail}`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: "Payment record deleted successfully" });
@@ -1021,7 +1068,8 @@ async function run() {
                     actionType: "Updated User Role",
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: `Role changed to "${role}"`
+                    details: `Role changed to "${role}"`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: "Role updated successfully" });
@@ -1060,7 +1108,8 @@ async function run() {
                     actionType: restricted ? "Restricted System Access" : "Unblocked System Access",
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: `Admin ${restricted ? "blocked" : "unblocked"} user from logging into the system`
+                    details: `Admin ${restricted ? "blocked" : "unblocked"} user from logging into the system`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: restricted ? "User restricted" : "User unblocked" });
@@ -1095,7 +1144,8 @@ async function run() {
                     actionType: "Deleted User Account",
                     targetEmail: email,
                     timestamp: new Date(),
-                    details: `Admin permanently deleted user with role "${user.role}" and contact "${user.contactNo ?? "N/A"}"`
+                    details: `Admin permanently deleted user with role "${user.role}" and contact "${user.contactNo ?? "N/A"}"`,
+                    viewedByAdmin: false
                 });
 
                 res.status(200).send({ message: "User deleted successfully" });
