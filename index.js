@@ -383,13 +383,21 @@ async function run() {
                     }
                 );
 
-                // ✅ Promote to active_riders if approved
+                //  save Data to active_riders if approved
                 if (status === "Approved") {
+                    // Fetch the user's role from users collection
+                    const userDoc = await userCollection.findOne({ email });
+                    const userRole = userDoc?.role || "rider"; // fallback in case not found
+
+                    // Remove `status` field from latestApp before inserting
+                    const { status: _, ...appDataWithoutStatus } = latestApp;
+
                     await activeRiderCollection.insertOne({
-                        ...latestApp,
-                        riderStatus: "Active",
-                        PromotedToRiderAt: new Date(),
-                        RiderEmail: riderEmail
+                        ...appDataWithoutStatus,   // application data (without status)
+                        riderStatus: "Active",     // your custom field
+                        RiderApplicationApproveAt: new Date(),
+                        RiderEmail: riderEmail,
+                        role: userRole             // ✅ add role from users collection
                     });
                 }
 
