@@ -628,7 +628,7 @@ async function run() {
 
         //#region ***** Parcel Releted API ***** ///
 
-        // API: Get parcels (optionally by user email)
+        // API: Get all parcels (optionally by user email)
         app.get('/parcels', verifyJWT, async (req, res) => {
             try {
                 const { email } = req.query; // ?email=user@gmail.com
@@ -819,6 +819,247 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch parcel" });
             }
         });
+
+        // ADMIN API: Get parcels filtered by status (or exclude Delivered)
+        app.get('/admin/parcels-by-status', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { status } = req.query;
+
+                let query = {};
+
+                if (!status) {
+                    return res.status(400).send({ message: "Status is required" });
+                }
+
+                if (status === "Pending") {
+                    // Show all parcels except Delivered
+                    query = { status: { $ne: "Delivered" } };
+                } else {
+                    // Exact match for other filters
+                    query = { status };
+                }
+
+                const parcels = await parcelCollection
+                    .find(query)
+                    .sort({ createdAt: -1 })
+                    .toArray();
+
+                res.send(parcels);
+            } catch (error) {
+                console.error("Error fetching parcels by status:", error);
+                res.status(500).send({ message: "Failed to fetch parcels" });
+            }
+        });
+
+        // ADMIN API: Update parcel status and sync with tracking collection
+        app.patch('/admin/parcels/:id/status', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { newStatus, updatedBy } = req.body;
+
+                const parcel = await parcelCollection.findOne({ _id: new ObjectId(id) });
+                if (!parcel) {
+                    return res.status(404).send({ message: "Parcel not found" });
+                }
+
+                await parcelCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    {
+                        $set: {
+                            status: newStatus,
+                            deliveredAt: newStatus === "Delivered" ? new Date() : null
+                        }
+                    }
+                );
+
+                await trackingCollection.insertOne({
+                    tracking_Id: parcel.trackingId,
+                    parcel_id: parcel._id,
+                    status: newStatus,
+                    message: `Status updated to ${newStatus}`,
+                    time: new Date(),
+                    updated_by: updatedBy || "System"
+                });
+
+                await notificationCollection.insertOne({
+                    title: "Parcel Status Update",
+                    message: `Your parcel ${parcel.trackingId} status changed to ${newStatus}.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: parcel.createdBy?.email || parcel.userEmail,
+                    fromAdmin: true,
+                    read: false
+                });
+
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Updated Parcel Status",
+                    targetEmail: parcel.createdBy?.email || parcel.userEmail,
+                    timestamp: new Date(),
+                    details: `Status changed to "${newStatus}" for parcel ${parcel.trackingId}`,
+                    viewedByAdmin: false
+                });
+
+                res.send({ success: true });
+            } catch (error) {
+                console.error("Error updating parcel status:", error);
+                res.status(500).send({ message: "Failed to update status" });
+            }
+        });
+
+        // ADMIN API: Delete parcel (only if Delivered or Cancelled)
+        app.delete('/admin/parcels/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { id } = req.params;
+
+                const parcel = await parcelCollection.findOne({ _id: new ObjectId(id) });
+                if (!parcel) {
+                    return res.status(404).send({ message: "Parcel not found" });
+                }
+
+                if (parcel.status !== "Delivered" && parcel.status !== "Cancelled") {
+                    return res.status(400).send({ message: "Only delivered or cancelled parcels can be deleted." });
+                }
+
+                const result = await parcelCollection.deleteOne({ _id: new ObjectId(id) });
+
+                await notificationCollection.insertOne({
+                    title: "Parcel Deleted",
+                    message: `Your parcel ${parcel.trackingId} has been deleted by admin.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: parcel.createdBy?.email || parcel.userEmail,
+                    fromAdmin: true,
+                    read: false
+                });
+
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Deleted Parcel",
+                    targetEmail: parcel.createdBy?.email || parcel.userEmail,
+                    timestamp: new Date(),
+                    details: `Parcel ${parcel.trackingId} deleted by admin`,
+                    viewedByAdmin: false
+                });
+
+                res.send({ success: true, result });
+            } catch (error) {
+                console.error("Error deleting parcel:", error);
+                res.status(500).send({ message: "Failed to delete parcel" });
+            }
+        });
+
+        // ADMIN API: Get count of parcels grouped by status
+        app.get('/admin/parcel-status-counts', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const pipeline = [
+                    {
+                        $group: {
+                            _id: "$status",
+                            count: { $sum: 1 }
+                        }
+                    }
+                ];
+
+                const result = await parcelCollection.aggregate(pipeline).toArray();
+
+                const statusCounts = {
+                    Pending: 0,
+                    PickedUp: 0,
+                    InTransit: 0,
+                    OutForDelivery: 0,
+                    Delivered: 0
+                };
+
+                result.forEach(({ _id, count }) => {
+                    statusCounts[_id.replace(/\s/g, '')] = count;
+                });
+
+                res.send(statusCounts);
+            } catch (error) {
+                console.error("Error fetching parcel status counts:", error);
+                res.status(500).send({ message: "Failed to fetch counts" });
+            }
+        });
+
+        // ADMIN API: Get parcel overview for a specific user
+        app.get('/admin/user-parcel-overview', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { email } = req.query;
+
+                if (!email) {
+                    return res.status(400).send({ message: "User email is required" });
+                }
+
+                const total = await parcelCollection.countDocuments({ "createdBy.email": email });
+                const delivered = await parcelCollection.countDocuments({ "createdBy.email": email, status: "Delivered" });
+                const pending = await parcelCollection.countDocuments({ "createdBy.email": email, status: { $ne: "Delivered" } });
+
+                res.send({ total, delivered, pending });
+            } catch (error) {
+                console.error("Error fetching user parcel overview:", error);
+                res.status(500).send({ message: "Failed to fetch overview" });
+            }
+        });
+
+        // ADMIN API: Get parcel overview for all users
+        app.get('/admin/all-user-parcel-overview', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const users = await userCollection.find({}, { projection: { email: 1, name: 1 } }).toArray();
+
+                const overview = await Promise.all(users.map(async (user) => {
+                    const total = await parcelCollection.countDocuments({ "createdBy.email": user.email });
+                    const delivered = await parcelCollection.countDocuments({ "createdBy.email": user.email, status: "Delivered" });
+                    const pending = await parcelCollection.countDocuments({ "createdBy.email": user.email, status: { $ne: "Delivered" } });
+
+                    return {
+                        email: user.email,
+                        name: user.name ?? "Unnamed",
+                        total,
+                        delivered,
+                        pending
+                    };
+                }));
+
+                res.send(overview);
+            } catch (error) {
+                console.error("Error fetching all user parcel overview:", error);
+                res.status(500).send({ message: "Failed to fetch overview" });
+            }
+        });
+
+        // ADMIN API: Edit parcel details (name, fare, instructions, etc.)
+        app.patch('/admin/parcels/:id/edit', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const updatedFields = req.body;
+
+                const parcel = await parcelCollection.findOne({ _id: new ObjectId(id) });
+                if (!parcel) {
+                    return res.status(404).send({ message: "Parcel not found" });
+                }
+
+                await parcelCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: updatedFields }
+                );
+
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Edited Parcel",
+                    targetEmail: parcel.createdBy?.email || parcel.userEmail,
+                    timestamp: new Date(),
+                    details: `Parcel ${parcel.trackingId} was edited by admin.`,
+                    viewedByAdmin: false
+                });
+
+                res.send({ success: true });
+            } catch (error) {
+                console.error("Error editing parcel:", error);
+                res.status(500).send({ message: "Failed to edit parcel" });
+            }
+        });
+
 
         // #endregion *** Parcel Releted APi Ended Here *** // 
 
@@ -1304,7 +1545,6 @@ async function run() {
         //#endregion *** Payment Releted Api Ended Here *** //
 
 
-
         //#region ***** User Releted API ***** ///
 
         // API: Upload user profile photo to Cloudinary and get the image URL
@@ -1534,8 +1774,22 @@ async function run() {
             }
         });
 
-        //#endregion *** User Releted API Ended Here *** //
+        // ADMIN API: Get all users (for dropdown selection)
+        app.get('/admin/users', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const users = await userCollection
+                    .find({}, { projection: { email: 1, name: 1 } })
+                    .sort({ name: 1 })
+                    .toArray();
 
+                res.send(users);
+            } catch (error) {
+                console.error("Error fetching users:", error);
+                res.status(500).send({ message: "Failed to fetch users" });
+            }
+        });
+
+        //#endregion *** User Releted API Ended Here *** //
 
 
         // testing if server is running or not : but need to comment before deploying on varcel
