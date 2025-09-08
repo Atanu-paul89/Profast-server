@@ -347,15 +347,6 @@ async function run() {
                 const firstName = latestApp.name?.split(" ")[0]?.toLowerCase() || "rider";
                 const riderEmail = `${firstName}.rider@pf.rider.com`;
 
-                // // ✅ Default feedback (always included)
-                // const defaultFeedback = `Congratulations. You are selected to be rider.\nPlease create an account with following credentials:\nemail: ${riderEmail}\npassword: @Rider1234 [You can change it from profile]`;
-
-                // // ✅ Combine default + admin feedback
-                // const finalFeedback = feedback
-                //     ? `${defaultFeedback}\n\nAdditional Note:\n${feedback}`
-                //     : defaultFeedback;
-                // ✅ Build feedback based on status
-
                 let finalFeedback = "";
 
                 if (status === "Approved") {
@@ -387,7 +378,8 @@ async function run() {
                 if (status === "Approved") {
                     // Fetch the user's role from users collection
                     const userDoc = await userCollection.findOne({ email });
-                    const userRole = userDoc?.role || "rider"; // fallback in case not found
+                    const userRole = userDoc?.role || "rider";
+                    const userpic = userDoc?.photoURL || "https://cdn-icons-png.freepik.com/512/305/305976.png";
 
                     // Remove `status` field from latestApp before inserting
                     const { status: _, ...appDataWithoutStatus } = latestApp;
@@ -397,7 +389,8 @@ async function run() {
                         riderStatus: "Active",     // your custom field
                         RiderApplicationApproveAt: new Date(),
                         RiderEmail: riderEmail,
-                        role: userRole             // ✅ add role from users collection
+                        role: userRole,
+                        photoURL: userpic
                     });
                 }
 
@@ -586,7 +579,139 @@ async function run() {
             }
         });
 
-        // #endregion
+        // ADMIN API: Get all active riders
+        app.get('/admin/active-riders', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const riders = await activeRiderCollection
+                    .find({})
+                    .sort({ createdAt: -1 }) // optional: show latest first
+                    .toArray();
+
+                res.send(riders);
+            } catch (error) {
+                console.error("Error fetching active riders:", error);
+                res.status(500).send({ message: "Failed to fetch active riders" });
+            }
+        });
+
+        // ADMIN API: Edit  data in active_riders collection
+        // app.patch('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
+        //     try {
+        //         const { email } = req.params;
+        //         const updateData = req.body; // 👈 all updated fields will come from frontend
+
+        //         if (!updateData || Object.keys(updateData).length === 0) {
+        //             return res.status(400).send({ message: "No update data provided" });
+        //         }
+
+        //         // ✅ Update rider data
+        //         const result = await activeRiderCollection.updateOne(
+        //             { email },
+        //             { $set: updateData }
+        //         );
+
+        //         if (result.matchedCount === 0) {
+        //             return res.status(404).send({ message: "Rider not found" });
+        //         }
+
+        //         // ✅ Insert log
+        //         await logCollection.insertOne({
+        //             adminEmail: req.decoded.email,
+        //             actionType: "Edited Rider",
+        //             targetEmail: email,
+        //             timestamp: new Date(),
+        //             details: `Rider ${email} data was edited by admin.`,
+        //             viewedByAdmin: false
+        //         });
+
+        //         res.send({ success: true, message: "Rider details updated successfully" });
+        //     } catch (error) {
+        //         console.error("Error editing rider:", error);
+        //         res.status(500).send({ message: "Failed to update rider details" });
+        //     }
+        // });
+        app.patch('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { email } = req.params;
+                let updateData = { ...req.body };
+
+                // 🔹 Remove _id if present
+                delete updateData._id;
+
+                if (!updateData || Object.keys(updateData).length === 0) {
+                    return res.status(400).send({ message: "No update data provided" });
+                }
+
+                const result = await activeRiderCollection.updateOne(
+                    { email },
+                    { $set: updateData }
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).send({ message: "Rider not found" });
+                }
+
+                // Log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Edited Rider",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Rider ${email} data was edited by admin.`,
+                    viewedByAdmin: false
+                });
+
+                res.send({ success: true, message: "Rider details updated successfully" });
+            } catch (error) {
+                console.error("Error editing rider:", error);
+                res.status(500).send({ message: "Failed to update rider details" });
+            }
+        });
+
+
+        // ADMIN API: Delete rider from active_riders
+        app.delete('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { email } = req.params;
+
+                // ✅ Delete rider record
+                const result = await activeRiderCollection.deleteOne({ email });
+
+                if (result.deletedCount === 0) {
+                    return res.status(404).send({ message: "Rider not found in active_riders" });
+                }
+
+                // ✅ Log deletion
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Deleted Rider",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Rider ${email} was deleted from active_riders by admin.`,
+                    viewedByAdmin: false
+                });
+
+                // ✅ Notify user (optional: only if you want rider to know)
+                await notificationCollection.insertOne({
+                    title: "Rider Account Removed",
+                    message: "Your rider profile has been removed from active riders by admin.",
+                    type: "Account",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
+                res.send({ success: true, message: "Rider deleted successfully" });
+            } catch (error) {
+                console.error("Error deleting rider:", error);
+                res.status(500).send({ message: "Failed to delete rider" });
+            }
+        });
+
+
+
+        // #endregion Rider Releted Api ended
 
 
         // #region ***** Log Releted API ***** ///
@@ -1068,6 +1193,123 @@ async function run() {
             }
         });
 
+        // ADMIN API: Assign parcel to rider
+        app.patch('/admin/assign-parcel/:parcelId', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { parcelId } = req.params;
+                const { riderEmail, riderName } = req.body;
+
+                const parcel = await parcelCollection.findOne({ _id: new ObjectId(parcelId) });
+                if (!parcel) return res.status(404).send({ message: "Parcel not found" });
+
+                // Update tracking
+                await trackingCollection.insertOne({
+                    tracking_Id: parcel.trackingId,
+                    parcel_id: parcel._id,
+                    status: parcel.status,
+                    message: "Parcel assigned to rider",
+                    time: new Date(),
+                    updated_by: { email: riderEmail, name: riderName }
+                });
+
+                // Update rider stats
+                await activeRidersCollection.updateOne(
+                    { email: riderEmail },
+                    {
+                        $inc: {
+                            assignedParcelsForDelivery: 1,
+                            pendingParcelsToDelivery: 1
+                        }
+                    }
+                );
+
+                // Log the assignment
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Assigned Parcel",
+                    targetEmail: riderEmail,
+                    timestamp: new Date(),
+                    details: `Parcel ${parcel.trackingId} assigned to rider ${riderName} (${riderEmail})`,
+                    viewedByAdmin: false
+                });
+
+                // Notify rider
+                await notificationCollection.insertOne({
+                    title: "New Parcel Assigned",
+                    message: `You have been assigned parcel ${parcel.trackingId} for delivery.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: riderEmail,
+                    fromAdmin: true,
+                    read: false
+                });
+
+                res.send({ success: true });
+            } catch (error) {
+                console.error("Error assigning parcel:", error);
+                res.status(500).send({ message: "Failed to assign parcel" });
+            }
+        });
+
+        // RIDER API: Mark parcel as delivered
+        app.patch('/rider/mark-delivered/:parcelId', verifyJWT, async (req, res) => {
+            try {
+                const { parcelId } = req.params;
+                const riderEmail = req.decoded.email;
+
+                const parcel = await parcelCollection.findOne({ _id: new ObjectId(parcelId) });
+                if (!parcel) return res.status(404).send({ message: "Parcel not found" });
+
+                await parcelCollection.updateOne(
+                    { _id: new ObjectId(parcelId) },
+                    {
+                        $set: {
+                            status: "Delivered",
+                            deliveredAt: new Date()
+                        }
+                    }
+                );
+
+                await trackingCollection.insertOne({
+                    tracking_Id: parcel.trackingId,
+                    parcel_id: parcel._id,
+                    status: "Delivered",
+                    message: "Your Parcel is Delivered Successfully. Thank You For Choosing Us",
+                    time: new Date(),
+                    updated_by: { email: riderEmail }
+                });
+
+                await activeRidersCollection.updateOne(
+                    { email: riderEmail },
+                    {
+                        $inc: {
+                            pendingParcelsToDelivery: -1,
+                            completedParcelDelivery: 1
+                        }
+                    }
+                );
+
+
+                // Notify merchant
+                await notificationCollection.insertOne({
+                    title: "Parcel Delivered",
+                    message: `Your parcel ${parcel.trackingId} has been successfully delivered.`,
+                    type: "Parcel",
+                    time: new Date(),
+                    toUser: parcel.createdBy?.email || parcel.userEmail,
+                    fromAdmin: false,
+                    read: false
+                });
+
+                res.send({ success: true });
+            } catch (error) {
+                console.error("Error marking parcel delivered:", error);
+                res.status(500).send({ message: "Failed to update parcel status" });
+            }
+        });
+
+
+
 
         // #endregion *** Parcel Releted APi Ended Here *** // 
 
@@ -1359,6 +1601,35 @@ async function run() {
 
             res.send({ success: true, insertedId: result.insertedId });
         });
+
+        // ADMIN API: Edit tracking log
+        app.patch('/admin/tracking/:trackingId', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { trackingId } = req.params;
+                const updates = req.body;
+
+                const result = await trackingCollection.updateOne(
+                    { _id: new ObjectId(trackingId) },
+                    { $set: updates }
+                );
+
+                // Log tracking edit
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Edited Tracking Log",
+                    targetEmail: updates.updated_by?.email || "System",
+                    timestamp: new Date(),
+                    details: `Tracking log ${trackingId} was edited.`,
+                    viewedByAdmin: false
+                });
+
+                res.send({ success: true, result });
+            } catch (error) {
+                console.error("Error editing tracking log:", error);
+                res.status(500).send({ message: "Failed to edit tracking log" });
+            }
+        });
+
 
         //#endregion *** Tracking Releted APi Ended Here *** //
 
@@ -1669,6 +1940,16 @@ async function run() {
                     { $set: { role } }
                 );
 
+                // ✅ Also update role in active_riders if the rider exists there
+                const riderExists = await activeRiderCollection.findOne({ email });
+                if (riderExists) {
+                    await activeRiderCollection.updateOne(
+                        { email },
+                        { $set: { role } }
+                    );
+                }
+
+
                 // Insert audit log
                 await logCollection.insertOne({
                     adminEmail: req.decoded.email,
@@ -1796,6 +2077,109 @@ async function run() {
                 res.status(500).send({ message: "Failed to fetch users" });
             }
         });
+
+        // ADMIN API: Restrict or Unrestrict rider 
+        app.patch('/admin/restrict-rider/:email', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { email } = req.params;
+                const { action } = req.body; // "restrict" or "unrestrict"
+
+                if (!["restrict", "unrestrict"].includes(action)) {
+                    return res.status(400).send({ message: "Invalid action. Use 'restrict' or 'unrestrict'." });
+                }
+
+                const updateFields = action === "restrict"
+                    ? { isRiderRestricted: true, riderStatus: "Restricted" }
+                    : { isRiderRestricted: false, riderStatus: "Active" };
+
+                // ✅ Update in active_riders collection
+                await activeRiderCollection.updateOne(
+                    { email },
+                    { $set: updateFields }
+                );
+
+                // ✅ Insert log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: action === "restrict" ? "Restricted Rider" : "Unrestricted Rider",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Rider ${email} was ${action}ed by admin.`,
+                    viewedByAdmin: false
+                });
+
+                // ✅ Notify rider
+                await notificationCollection.insertOne({
+                    title: action === "restrict" ? "Account Restricted" : "Account Unrestricted",
+                    message: action === "restrict"
+                        ? "Your rider account has been restricted by admin."
+                        : "Your rider account has been unrestricted by admin. You can continue deliveries.",
+                    type: "Account",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
+                res.send({ success: true, message: `Rider ${action}ed successfully` });
+            } catch (error) {
+                console.error("Error updating rider restriction:", error);
+                res.status(500).send({ message: "Failed to update rider restriction" });
+            }
+        });
+
+
+        // ADMIN API: update user role from Riders Page
+        app.patch('/active-riders/:email/role', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const { role } = req.body;
+
+                if (!role) {
+                    return res.status(400).send({ message: "Role is required" });
+                }
+
+                // ✅ Update in active_riders
+                await activeRiderCollection.updateOne(
+                    { email },
+                    { $set: { role } }
+                );
+
+                // ✅ Also sync update in users collection
+                await userCollection.updateOne(
+                    { email },
+                    { $set: { role } }
+                );
+
+                // ✅ Insert audit log
+                await logCollection.insertOne({
+                    adminEmail: req.decoded.email,
+                    actionType: "Updated Rider Role",
+                    targetEmail: email,
+                    timestamp: new Date(),
+                    details: `Role changed to "${role} by admin"`,
+                    viewedByAdmin: false
+                });
+
+                // ✅ Create notification
+                await notificationCollection.insertOne({
+                    title: "Role Updated",
+                    message: `Your rider role has been updated to "${role}" by an admin.`,
+                    type: "Role",
+                    time: new Date(),
+                    toUser: email,
+                    fromAdmin: true,
+                    read: false
+                });
+
+                res.status(200).send({ message: "Rider role updated successfully" });
+            } catch (error) {
+                console.error("Error updating rider role:", error);
+                res.status(500).send({ message: "Failed to update rider role" });
+            }
+        });
+
+
 
         //#endregion *** User Releted API Ended Here *** //
 
