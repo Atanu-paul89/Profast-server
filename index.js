@@ -50,7 +50,7 @@ async function run() {
     try {
         await client.connect();
 
-        //* #region Defining all DB Collectections here 
+        // #region Defining all DB Collectections here 
         const db = client.db('profast');
         const parcelCollection = db.collection('parcels');
         const userCollection = db.collection('users');
@@ -595,41 +595,6 @@ async function run() {
         });
 
         // ADMIN API: Edit  data in active_riders collection
-        // app.patch('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
-        //     try {
-        //         const { email } = req.params;
-        //         const updateData = req.body; // 👈 all updated fields will come from frontend
-
-        //         if (!updateData || Object.keys(updateData).length === 0) {
-        //             return res.status(400).send({ message: "No update data provided" });
-        //         }
-
-        //         // ✅ Update rider data
-        //         const result = await activeRiderCollection.updateOne(
-        //             { email },
-        //             { $set: updateData }
-        //         );
-
-        //         if (result.matchedCount === 0) {
-        //             return res.status(404).send({ message: "Rider not found" });
-        //         }
-
-        //         // ✅ Insert log
-        //         await logCollection.insertOne({
-        //             adminEmail: req.decoded.email,
-        //             actionType: "Edited Rider",
-        //             targetEmail: email,
-        //             timestamp: new Date(),
-        //             details: `Rider ${email} data was edited by admin.`,
-        //             viewedByAdmin: false
-        //         });
-
-        //         res.send({ success: true, message: "Rider details updated successfully" });
-        //     } catch (error) {
-        //         console.error("Error editing rider:", error);
-        //         res.status(500).send({ message: "Failed to update rider details" });
-        //     }
-        // });
         app.patch('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const { email } = req.params;
@@ -708,6 +673,53 @@ async function run() {
                 res.status(500).send({ message: "Failed to delete rider" });
             }
         });
+
+        // ADMIN API: Get parcel summary for a specific rider
+        app.get('/admin/rider-parcel-overview', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const { email } = req.query;
+                const rider = await activeRiderCollection.findOne({ email });
+
+                if (!rider) {
+                    return res.status(404).send({ message: "Rider not found" });
+                }
+
+                res.send({
+                    name: rider.name,
+                    email: rider.email,
+                    region: rider.region,
+                    assigned: rider.assignedParcelsForDelivery || 0,
+                    pending: rider.pendingParcelsToDelivery || 0,
+                    delivered: rider.completedParcelDelivery || 0
+                });
+            } catch (error) {
+                console.error("Error fetching rider overview:", error);
+                res.status(500).send({ message: "Failed to fetch rider overview" });
+            }
+        });
+
+        // ADMIN API: Get parcel summary for all riders
+        app.get('/admin/all-rider-parcel-overview', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const riders = await activeRiderCollection.find({}).toArray();
+
+                const summary = riders.map(r => ({
+                    name: r.name,
+                    email: r.email,
+                    region: r.region,
+                    assigned: r.assignedParcelsForDelivery || 0,
+                    pending: r.pendingParcelsToDelivery || 0,
+                    delivered: r.completedParcelDelivery || 0
+                }));
+
+                res.send(summary);
+            } catch (error) {
+                console.error("Error fetching all rider overview:", error);
+                res.status(500).send({ message: "Failed to fetch rider overview" });
+            }
+        });
+
+
 
 
 
@@ -1340,6 +1352,24 @@ async function run() {
             }
         });
 
+        // ADMIN API: Get sum of parcels 
+        app.get('/admin/parcel-status-summary', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const summary = await parcelCollection.aggregate([
+                    {
+                        $group: {
+                            _id: "$status",
+                            count: { $sum: 1 }
+                        }
+                    }
+                ]).toArray();
+                res.send(summary);
+            } catch (error) {
+                console.error("Error fetching parcel status summary:", error);
+                res.status(500).send({ message: "Failed to fetch parcel summary" });
+            }
+        });
+
 
         // #endregion *** Parcel Releted APi Ended Here *** // 
 
@@ -1659,6 +1689,7 @@ async function run() {
                 res.status(500).send({ message: "Failed to edit tracking log" });
             }
         });
+
 
 
         //#endregion *** Tracking Releted APi Ended Here *** //
