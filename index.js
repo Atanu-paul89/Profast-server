@@ -755,6 +755,21 @@ async function run() {
 
                 // If status is Delivered, update rider stats
                 if (newStatus === "Delivered") {
+                    const now = new Date();
+
+                    // Update parcel with delivery metadata
+                    await parcelCollection.updateOne(
+                        { _id: new ObjectId(parcelId) },
+                        {
+                            $set: {
+                                deliveredAt: now,
+                                deliveredBy: {
+                                    name: parcel.assignedTo?.name || "Unknown",
+                                    email: parcel.assignedTo?.email || riderEmail,
+                                }
+                            }
+                        }
+                    );
                     await activeRiderCollection.updateOne(
                         { email: riderEmail },
                         {
@@ -780,7 +795,6 @@ async function run() {
                     let sameDayBonus = 0;
                     let dailyBonus = 0;
 
-                    const now = new Date();
                     const assignedDate = new Date(parcel.assignedAt).toDateString();
                     const deliveredDate = now.toDateString();
 
@@ -822,36 +836,6 @@ async function run() {
         });
 
         // RIDER API: Get earnings summary for logged-in rider
-        // app.get('/rider/earnings-summary', verifyJWT, verifyRider, async (req, res) => {
-        //     try {
-        //         const riderEmail = req.decoded.email;
-
-        //         const earnings = await riderEarningsCollection.find({ riderEmail }).sort({ deliveredAt: -1 }).toArray();
-
-        //         const aggregate = await riderEarningsCollection.aggregate([
-        //             { $match: { riderEmail } },
-        //             {
-        //                 $group: {
-        //                     _id: null,
-        //                     totalEarned: { $sum: "$amount" },
-        //                     totalDeliveries: { $sum: 1 },
-        //                     totalBonus: { $sum: { $add: ["$sameDayBonus", "$dailyBonus"] } }
-        //                 }
-        //             }
-        //         ]).toArray();
-
-        //         const summary = aggregate[0] || {
-        //             totalEarned: 0,
-        //             totalDeliveries: 0,
-        //             totalBonus: 0
-        //         };
-
-        //         res.send({ summary, earnings });
-        //     } catch (error) {
-        //         console.error("Error fetching rider earnings:", error);
-        //         res.status(500).send({ message: "Failed to fetch earnings summary" });
-        //     }
-        // });
         app.get('/rider/earnings-summary', verifyJWT, verifyRider, async (req, res) => {
             try {
                 const riderEmail = req.decoded.email;
