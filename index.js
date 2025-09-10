@@ -60,6 +60,7 @@ async function run() {
         const logCollection = db.collection('admin_logs');
         const paymentCollection = db.collection('payments');
         const notificationCollection = db.collection('notifications');
+        const riderEarningsCollection = db.collection('rider_earnings');
 
         //#endregion
 
@@ -116,10 +117,18 @@ async function run() {
             res.send({ token });
         });
 
-        // ***** ADMIN setup and verified ***** // 
+        // ***** ADMIN and Rider setup and verified ***** // 
         const verifyAdmin = async (req, res, next) => {
             const user = await userCollection.findOne({ email: req.decoded.email });
             if (user?.role !== "admin") {
+                return res.status(403).send({ message: "Forbidden" });
+            }
+            next();
+        };
+
+        const verifyRider = async (req, res, next) => {
+            const user = await userCollection.findOne({ email: req.decoded.email });
+            if (user?.role !== "rider") {
                 return res.status(403).send({ message: "Forbidden" });
             }
             next();
@@ -633,7 +642,6 @@ async function run() {
             }
         });
 
-
         // ADMIN API: Delete rider from active_riders
         app.delete('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
@@ -720,7 +728,7 @@ async function run() {
         });
 
         // RIDER API: Rider Update status (Out for Delivery & Delivered)
-        app.patch('/rider/update-status/:parcelId', verifyJWT, async (req, res) => {
+        app.patch('/rider/update-status/:parcelId', verifyJWT, verifyRider, async (req, res) => {
             try {
                 const { parcelId } = req.params;
                 const { newStatus } = req.body;
@@ -747,7 +755,7 @@ async function run() {
 
                 // If status is Delivered, update rider stats
                 if (newStatus === "Delivered") {
-                    await activeRidersCollection.updateOne(
+                    await activeRiderCollection.updateOne(
                         { email: riderEmail },
                         {
                             $inc: {
@@ -766,12 +774,143 @@ async function run() {
                         fromAdmin: false,
                         read: false
                     });
+
+                    // Earnings logic
+                    const baseFare = 40;
+                    let sameDayBonus = 0;
+                    let dailyBonus = 0;
+
+                    const now = new Date();
+                    const assignedDate = new Date(parcel.assignedAt).toDateString();
+                    const deliveredDate = now.toDateString();
+
+                    if (assignedDate === deliveredDate) {
+                        sameDayBonus = 10;
+                    }
+
+                    const todayDeliveryCount = await riderEarningsCollection.countDocuments({
+                        riderEmail,
+                        deliveryDate: deliveredDate
+                    });
+
+                    if (todayDeliveryCount + 1 === 50) {
+                        dailyBonus = 200;
+                    }
+
+                    const totalAmount = baseFare + sameDayBonus + dailyBonus;
+
+                    await riderEarningsCollection.insertOne({
+                        riderEmail,
+                        parcelId: parcel._id,
+                        trackingId: parcel.trackingId,
+                        amount: totalAmount,
+                        baseFare,
+                        sameDayBonus,
+                        dailyBonus,
+                        deliveredAt: now,
+                        assignedAt: parcel.assignedAt,
+                        deliveryDate: deliveredDate
+                    });
                 }
+
 
                 res.send({ success: true });
             } catch (error) {
                 console.error("Error updating parcel status:", error);
                 res.status(500).send({ message: "Failed to update parcel status" });
+            }
+        });
+
+        // RIDER API: Get earnings summary for logged-in rider
+        // app.get('/rider/earnings-summary', verifyJWT, verifyRider, async (req, res) => {
+        //     try {
+        //         const riderEmail = req.decoded.email;
+
+        //         const earnings = await riderEarningsCollection.find({ riderEmail }).sort({ deliveredAt: -1 }).toArray();
+
+        //         const aggregate = await riderEarningsCollection.aggregate([
+        //             { $match: { riderEmail } },
+        //             {
+        //                 $group: {
+        //                     _id: null,
+        //                     totalEarned: { $sum: "$amount" },
+        //                     totalDeliveries: { $sum: 1 },
+        //                     totalBonus: { $sum: { $add: ["$sameDayBonus", "$dailyBonus"] } }
+        //                 }
+        //             }
+        //         ]).toArray();
+
+        //         const summary = aggregate[0] || {
+        //             totalEarned: 0,
+        //             totalDeliveries: 0,
+        //             totalBonus: 0
+        //         };
+
+        //         res.send({ summary, earnings });
+        //     } catch (error) {
+        //         console.error("Error fetching rider earnings:", error);
+        //         res.status(500).send({ message: "Failed to fetch earnings summary" });
+        //     }
+        // });
+        app.get('/rider/earnings-summary', verifyJWT, verifyRider, async (req, res) => {
+            try {
+                const riderEmail = req.decoded.email;
+                const now = new Date();
+
+                const todayStr = now.toDateString();
+                const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                const yearStr = `${now.getFullYear()}`;
+
+                const allEarnings = await riderEarningsCollection.find({ riderEmail }).sort({ deliveredAt: -1 }).toArray();
+
+                const summary = {
+                    today: 0,
+                    month: 0,
+                    year: 0,
+                    total: 0,
+                    todayBonus: 0,
+                    monthBonus: 0,
+                    yearBonus: 0,
+                    totalBonus: 0,
+                    todayDeliveries: 0,
+                    monthDeliveries: 0,
+                    yearDeliveries: 0,
+                    totalDeliveries: allEarnings.length
+                };
+
+                allEarnings.forEach(entry => {
+                    const deliveredDate = new Date(entry.deliveredAt);
+                    const entryDay = deliveredDate.toDateString();
+                    const entryMonth = `${deliveredDate.getFullYear()}-${String(deliveredDate.getMonth() + 1).padStart(2, '0')}`;
+                    const entryYear = `${deliveredDate.getFullYear()}`;
+                    const bonus = (entry.sameDayBonus || 0) + (entry.dailyBonus || 0);
+
+                    summary.total += entry.amount;
+                    summary.totalBonus += bonus;
+
+                    if (entryDay === todayStr) {
+                        summary.today += entry.amount;
+                        summary.todayBonus += bonus;
+                        summary.todayDeliveries += 1;
+                    }
+
+                    if (entryMonth === monthStr) {
+                        summary.month += entry.amount;
+                        summary.monthBonus += bonus;
+                        summary.monthDeliveries += 1;
+                    }
+
+                    if (entryYear === yearStr) {
+                        summary.year += entry.amount;
+                        summary.yearBonus += bonus;
+                        summary.yearDeliveries += 1;
+                    }
+                });
+
+                res.send({ summary, earnings: allEarnings });
+            } catch (error) {
+                console.error("Error fetching rider earnings:", error);
+                res.status(500).send({ message: "Failed to fetch earnings summary" });
             }
         });
 
@@ -1341,12 +1480,29 @@ async function run() {
             }
         });
 
+        // RIDER API: Get all assigned parcels for a rider
+        app.get('/rider/assigned-parcels', verifyJWT, verifyRider, async (req, res) => {
+            try {
+                const riderEmail = req.decoded.email;
+
+                const parcels = await parcelCollection
+                    .find({ "assignedTo.email": riderEmail, status: { $ne: "Delivered" } })
+                    .sort({ assignedAt: -1 })
+                    .toArray();
+
+                res.send(parcels);
+            } catch (error) {
+                console.error("Error fetching assigned parcels:", error);
+                res.status(500).send({ message: "Failed to fetch assigned parcels" });
+            }
+        });
+
+
         // ADMIN API: GET all the parcels to assigning them to riders 
         app.get('/admin/parcels-to-assign', verifyJWT, verifyAdmin, async (req, res) => {
             const parcels = await parcelCollection.find({ status: { $ne: "Delivered" } }).toArray();
             res.send(parcels);
         });
-
 
         // ADMIN API: Get sum of parcels 
         app.get('/admin/parcel-status-summary', verifyJWT, verifyAdmin, async (req, res) => {
