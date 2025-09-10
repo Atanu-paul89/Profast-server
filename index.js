@@ -719,7 +719,61 @@ async function run() {
             }
         });
 
+        // RIDER API: Rider Update status (Out for Delivery & Delivered)
+        app.patch('/rider/update-status/:parcelId', verifyJWT, async (req, res) => {
+            try {
+                const { parcelId } = req.params;
+                const { newStatus } = req.body;
+                const riderEmail = req.decoded.email;
 
+                const parcel = await parcelCollection.findOne({ _id: new ObjectId(parcelId) });
+                if (!parcel || parcel.assignedTo?.email !== riderEmail) {
+                    return res.status(403).send({ message: "Unauthorized or parcel not found" });
+                }
+
+                await parcelCollection.updateOne(
+                    { _id: new ObjectId(parcelId) },
+                    { $set: { status: newStatus } }
+                );
+
+                await trackingCollection.insertOne({
+                    tracking_Id: parcel.trackingId,
+                    parcel_id: parcel._id,
+                    status: newStatus,
+                    message: `Status updated to ${newStatus} by rider`,
+                    time: new Date(),
+                    updated_by: { email: riderEmail }
+                });
+
+                // If status is Delivered, update rider stats
+                if (newStatus === "Delivered") {
+                    await activeRidersCollection.updateOne(
+                        { email: riderEmail },
+                        {
+                            $inc: {
+                                pendingParcelsToDelivery: -1,
+                                completedParcelDelivery: 1
+                            }
+                        }
+                    );
+
+                    await notificationCollection.insertOne({
+                        title: "Parcel Delivered",
+                        message: `Your parcel ${parcel.trackingId} has been successfully delivered.`,
+                        type: "Parcel",
+                        time: new Date(),
+                        toUser: parcel.createdBy?.email || parcel.userEmail,
+                        fromAdmin: false,
+                        read: false
+                    });
+                }
+
+                res.send({ success: true });
+            } catch (error) {
+                console.error("Error updating parcel status:", error);
+                res.status(500).send({ message: "Failed to update parcel status" });
+            }
+        });
 
 
 
@@ -1062,9 +1116,6 @@ async function run() {
                     return res.status(404).send({ message: "Parcel not found" });
                 }
 
-                if (parcel.status !== "Delivered" && parcel.status !== "Cancelled") {
-                    return res.status(400).send({ message: "Only delivered or cancelled parcels can be deleted." });
-                }
 
                 const result = await parcelCollection.deleteOne({ _id: new ObjectId(id) });
 
@@ -1296,61 +1347,6 @@ async function run() {
             res.send(parcels);
         });
 
-        // RIDER API: Rider Update status (Out for Delivery & Delivered)
-        app.patch('/rider/update-status/:parcelId', verifyJWT, async (req, res) => {
-            try {
-                const { parcelId } = req.params;
-                const { newStatus } = req.body;
-                const riderEmail = req.decoded.email;
-
-                const parcel = await parcelCollection.findOne({ _id: new ObjectId(parcelId) });
-                if (!parcel || parcel.assignedTo?.email !== riderEmail) {
-                    return res.status(403).send({ message: "Unauthorized or parcel not found" });
-                }
-
-                await parcelCollection.updateOne(
-                    { _id: new ObjectId(parcelId) },
-                    { $set: { status: newStatus } }
-                );
-
-                await trackingCollection.insertOne({
-                    tracking_Id: parcel.trackingId,
-                    parcel_id: parcel._id,
-                    status: newStatus,
-                    message: `Status updated to ${newStatus} by rider`,
-                    time: new Date(),
-                    updated_by: { email: riderEmail }
-                });
-
-                // If status is Delivered, update rider stats
-                if (newStatus === "Delivered") {
-                    await activeRidersCollection.updateOne(
-                        { email: riderEmail },
-                        {
-                            $inc: {
-                                pendingParcelsToDelivery: -1,
-                                completedParcelDelivery: 1
-                            }
-                        }
-                    );
-
-                    await notificationCollection.insertOne({
-                        title: "Parcel Delivered",
-                        message: `Your parcel ${parcel.trackingId} has been successfully delivered.`,
-                        type: "Parcel",
-                        time: new Date(),
-                        toUser: parcel.createdBy?.email || parcel.userEmail,
-                        fromAdmin: false,
-                        read: false
-                    });
-                }
-
-                res.send({ success: true });
-            } catch (error) {
-                console.error("Error updating parcel status:", error);
-                res.status(500).send({ message: "Failed to update parcel status" });
-            }
-        });
 
         // ADMIN API: Get sum of parcels 
         app.get('/admin/parcel-status-summary', verifyJWT, verifyAdmin, async (req, res) => {
