@@ -112,7 +112,7 @@ async function run() {
                 return res.status(403).send({ message: "Access denied. Your account is restricted." });
             }
 
-            const token = jwt.sign({ email }, secret, { expiresIn: '1h' });
+            const token = jwt.sign({ email }, secret, { expiresIn: '7d' });
 
             res.send({ token });
         });
@@ -134,7 +134,7 @@ async function run() {
             next();
         };
 
-        // #endregion
+        // #endregion Security & jwt configure ended 
 
 
         // #region ***** Rider & Rider APllication Releted API *****  
