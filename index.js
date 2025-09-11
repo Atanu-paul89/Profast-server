@@ -1,6 +1,4 @@
-//#region initial require parameters
-const dotenv = require('dotenv');
-dotenv.config();
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cloudinary = require("cloudinary").v2;
@@ -11,7 +9,7 @@ const { ObjectId } = require("mongodb");
 const jwt = require('jsonwebtoken');
 const secret = process.env.JWT_SECRET;
 
-//#endregion
+
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
@@ -48,7 +46,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
     try {
-        await client.connect();
+        // await client.connect();
 
         // #region Defining all DB Collectections here 
         const db = client.db('profast');
@@ -73,7 +71,7 @@ async function run() {
             const authHeader = req.headers.authorization;
 
             if (!authHeader) {
-                return res.status(401).send({ message: "Unauthorized access: no tok" });
+                return res.status(401).send({ message: "Unauthorized access: no token" });
             }
 
             const token = authHeader.split(' ')[1];
@@ -1773,6 +1771,114 @@ async function run() {
             }
         });
 
+        // ADMIN API: Admin summary stats
+        app.get('/admin/summary-stats', verifyJWT, async (req, res) => {
+            const totalParcels = await parcelCollection.countDocuments();
+            const delivered = await parcelCollection.countDocuments({ status: "Delivered" });
+            const pending = await parcelCollection.countDocuments({ status: "Pending" });
+            const cancelled = await parcelCollection.countDocuments({ status: "Cancelled" });
+
+            const totalUsers = await userCollection.countDocuments();
+            const totalRiders = await userCollection.countDocuments({ role: "rider" });
+            const totalMerchants = await userCollection.countDocuments({ role: "merchant" });
+
+            const totalRevenue = await paymentCollection.aggregate([
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]).toArray();
+
+            const totalPaidToRiders = await riderEarningsCollection.aggregate([
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]).toArray();
+
+            res.send({
+                parcels: { totalParcels, delivered, pending, cancelled },
+                users: { totalUsers, totalRiders, totalMerchants },
+                revenue: totalRevenue[0]?.total || 0,
+                riderPayout: totalPaidToRiders[0]?.total || 0
+            });
+        });
+
+        // ADMIN API: get riderts performance overview 
+        app.get('/admin/rider-performance', verifyJWT, async (req, res) => {
+            const activeRiders = await activeRiderCollection.find({ riderStatus: "Active" }).toArray();
+            const earnings = await riderEarningsCollection.find({}).toArray();
+
+            const riderMap = {};
+            let totalMinutes = 0;
+            let totalDeliveries = 0;
+            let totalSameDayBonus = 0;
+            let totalDailyBonus = 0;
+
+            earnings.forEach(entry => {
+                const email = entry.riderEmail;
+                riderMap[email] = (riderMap[email] || 0) + 1;
+
+                const assigned = new Date(entry.assignedAt);
+                const delivered = new Date(entry.deliveredAt);
+                const duration = (delivered - assigned) / (1000 * 60); // minutes
+                totalMinutes += duration;
+                totalDeliveries++;
+
+                totalSameDayBonus += entry.sameDayBonus || 0;
+                totalDailyBonus += entry.dailyBonus || 0;
+            });
+
+            const topRider = Object.entries(riderMap).sort((a, b) => b[1] - a[1])[0];
+
+            res.send({
+                totalActiveRiders: activeRiders.length,
+                topRiderEmail: topRider?.[0] || 'N/A',
+                topRiderDeliveries: topRider?.[1] || 0,
+                avgDeliveryTime: (totalMinutes / totalDeliveries).toFixed(2),
+                totalSameDayBonus,
+                totalDailyBonus
+            });
+        });
+
+        // ADMIN API: users stats  overview 
+        app.get('/admin/user-stats', verifyJWT, async (req, res) => {
+            const users = await userCollection.find({}).toArray();
+            const parcels = await parcelCollection.find({}).toArray();
+            const payments = await paymentCollection.find({}).toArray();
+
+            const totalUsers = users.length;
+            const totalMerchants = users.filter(u => u.role === 'merchant').length;
+            const totalRiders = users.filter(u => u.role === 'rider').length;
+            const restrictedUsers = users.filter(u => u.isRestricted).length;
+
+            const merchantParcelMap = {};
+            parcels.forEach(p => {
+                const email = p.createdBy?.email;
+                if (email) merchantParcelMap[email] = (merchantParcelMap[email] || 0) + 1;
+            });
+
+            const topMerchant = Object.entries(merchantParcelMap).sort((a, b) => b[1] - a[1])[0];
+
+            const paymentMap = {};
+            payments.forEach(p => {
+                const email = p.payerEmail;
+                paymentMap[email] = (paymentMap[email] || 0) + p.amount;
+            });
+
+            const topPayer = Object.entries(paymentMap).sort((a, b) => b[1] - a[1])[0];
+
+            res.send({
+                totalUsers,
+                totalMerchants,
+                totalRiders,
+                restrictedUsers,
+                topMerchant: {
+                    email: topMerchant?.[0] || 'N/A',
+                    parcels: topMerchant?.[1] || 0
+                },
+                topPayer: {
+                    email: topPayer?.[0] || 'N/A',
+                    amount: topPayer?.[1] || 0
+                }
+            });
+        });
+
+
 
         //#endregion *** Notfication Releted API Eneded here ***** ///
 
@@ -1937,7 +2043,26 @@ async function run() {
             }
         });
 
-        // ADMIN API: View all payments by the users
+        // ADMIN API: View all payments
+        app.get('/admin/payments', verifyJWT, verifyAdmin, async (req, res) => {
+            try {
+                const payments = await paymentCollection
+                    .find()
+                    .sort({ paidAt: -1 })
+                    .toArray();
+
+                if (payments.length === 0) {
+                    return res.status(200).send({ message: "No payments found", payments: [] });
+                }
+
+                res.status(200).send({ payments });
+            } catch (error) {
+                console.error("Error fetching all payments:", error);
+                res.status(500).send({ message: "Internal server error" });
+            }
+        });
+
+        // ADMIN API: get all payments by the users
         app.get('/admin/payments/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -2406,7 +2531,7 @@ async function run() {
 
 
         // testing if server is running or not : but need to comment before deploying on varcel
-        await client.db("admin").command({ ping: 1 });
+        // await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB:Profast!");
     }
 
