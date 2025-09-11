@@ -73,7 +73,7 @@ async function run() {
             const authHeader = req.headers.authorization;
 
             if (!authHeader) {
-                return res.status(401).send({ message: "Unauthorized access" });
+                return res.status(401).send({ message: "Unauthorized access: no tok" });
             }
 
             const token = authHeader.split(' ')[1];
@@ -102,7 +102,7 @@ async function run() {
                 return res.status(400).send({ message: "Email is required" });
             }
 
-            // ✅ Check if user is restricted
+            // ✅ Check if user is existed or restricted
             const user = await userCollection.findOne({ email });
             if (!user) {
                 return res.status(404).send({ message: "User not found" });
@@ -112,7 +112,7 @@ async function run() {
                 return res.status(403).send({ message: "Access denied. Your account is restricted." });
             }
 
-            const token = jwt.sign({ email }, secret, { expiresIn: '7d' });
+            const token = jwt.sign({ email, role: user.role }, secret, { expiresIn: '7d' });
 
             res.send({ token });
         });
@@ -898,6 +898,17 @@ async function run() {
             }
         });
 
+        // RIDER API: get DElivery History 
+        app.get('/rider/delivery-history', verifyJWT, async (req, res) => {
+            const riderEmail = req.decoded.email;
+
+            const deliveredParcels = await parcelCollection
+                .find({ status: "Delivered", "deliveredBy.email": riderEmail })
+                .sort({ deliveredAt: -1 }) 
+                .toArray();
+
+            res.send(deliveredParcels);
+        });
 
 
         // #endregion Rider Releted Api ended
