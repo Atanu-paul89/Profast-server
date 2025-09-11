@@ -904,11 +904,24 @@ async function run() {
 
             const deliveredParcels = await parcelCollection
                 .find({ status: "Delivered", "deliveredBy.email": riderEmail })
-                .sort({ deliveredAt: -1 }) 
+                .sort({ deliveredAt: -1 })
                 .toArray();
 
             res.send(deliveredParcels);
         });
+
+        //RIDER API: fetch rider earnings 
+        app.get('/rider/performance-earnings', verifyJWT, async (req, res) => {
+            const riderEmail = req.decoded.email;
+
+            const earnings = await riderEarningsCollection
+                .find({ riderEmail })
+                .sort({ deliveredAt: -1 })
+                .toArray();
+
+            res.send(earnings);
+        });
+
 
 
         // #endregion Rider Releted Api ended
