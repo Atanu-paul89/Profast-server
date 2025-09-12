@@ -601,6 +601,25 @@ async function run() {
             }
         });
 
+        // ADMIN API: Get a specific active rider by email
+        app.get('/admin/active-riders/:email', verifyJWT, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                const rider = await activeRiderCollection.findOne({ email });
+
+                if (!rider) {
+                    return res.status(404).send({ message: "Rider not found" });
+                }
+
+                res.send(rider);
+            } catch (error) {
+                console.error("Error fetching rider:", error);
+                res.status(500).send({ message: "Failed to fetch rider" });
+            }
+        });
+
+
         // ADMIN API: Edit  data in active_riders collection
         app.patch('/admin/active-riders/:email', verifyJWT, verifyAdmin, async (req, res) => {
             try {
