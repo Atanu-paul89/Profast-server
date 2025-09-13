@@ -33,23 +33,23 @@ POST /auth/login
 GET /users/:email
 PATCH /users/restrict/:id
 
-🔹 Parcels
+🔹Parcels
 POST /parcels/create
 GET /parcels/user/:email
 PATCH /parcels/status/:id
 GET /parcels/tracking/:trackingId
 
-🔹 Payments
+🔹Payments
 POST /payments/log
 GET /payments/user/:email
 GET /payments/stats
 
-🔹 Rider
+🔹Rider
 POST /rider/apply
 GET /rider/performance/:email
 PATCH /rider/approve/:id
 
-🔹 Admin & Analytics
+🔹Admin & Analytics
 GET /admin/user-stats
 GET /admin/system-logs
 GET /admin/parcel-summary
